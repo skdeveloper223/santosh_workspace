@@ -1,0 +1,96 @@
+# ==============================
+# Old/legacy project (not tracked)
+# ==============================
+uhf_rfid_reader_application_old/
+
+# ==============================
+# Claude Code local config
+# ==============================
+.claude/
+
+# ==============================
+# OS / editor junk
+# ==============================
+.DS_Store
+Thumbs.db
+*.swp
+.vscode/
+.idea/
+*.iml
+*.ipr
+*.iws
+
+# ==============================
+# Env / secrets
+# ==============================
+.env
+.env.local
+.env.development
+.env.production
+*.pem
+*.key
+
+# ==============================
+# Node / web app (React, Vite, etc.)
+# ==============================
+node_modules/
+dist/
+build/
+.cache/
+.vite/
+.next/
+.turbo/
+coverage/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# ==============================
+# Flutter / Dart
+# ==============================
+**/.dart_tool/
+**/.flutter-plugins
+**/.flutter-plugins-dependencies
+**/.packages
+**/.pub-cache/
+**/.pub/
+**/*.g.dart
+**/*.freezed.dart
+flutter_app/build/
+flutter_app/.metadata
+
+# Android (within flutter_app)
+**/android/.gradle/
+**/android/local.properties
+**/android/key.properties
+**/android/**/*.jks
+**/android/**/*.keystore
+**/android/captures/
+**/android/.externalNativeBuild/
+**/android/.cxx/
+
+# iOS / macOS (within flutter_app)
+**/ios/Pods/
+**/ios/.symlinks/
+**/ios/Flutter/Flutter.framework
+**/ios/Flutter/Flutter.podspec
+**/ios/Flutter/App.framework
+**/macos/Pods/
+**/macos/Flutter/ephemeral/
+**/*.xcuserstate
+**/xcuserdata/
+
+# Windows / Linux desktop (within flutter_app)
+**/windows/flutter/ephemeral/
+**/linux/flutter/ephemeral/
+
+# ==============================
+# Misc build/output artifacts
+# ==============================
+*.apk
+*.aab
+*.ipa
+*.app
+out/
