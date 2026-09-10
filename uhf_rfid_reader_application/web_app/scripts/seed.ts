@@ -19,9 +19,15 @@
  *
  * Run with: npm run seed
  */
-import "dotenv/config";
+// `dotenv/config` on its own only loads ".env" — this project (like Next.js
+// itself) keeps real values in ".env.local" instead, so both are loaded
+// explicitly here, in Next's own precedence order (.env.local wins).
+import { config as loadEnv } from "dotenv";
+loadEnv({ path: ".env" });
+loadEnv({ path: ".env.local", override: true });
+
 import { randomBytes } from "node:crypto";
-import { createClient, type SupabaseClient } from "@supabase/supabase-js";
+import { createClient } from "@supabase/supabase-js";
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -73,6 +79,17 @@ const DEFAULT_ACTIONS: Record<(typeof ROLE_NAMES)[number], string[]> = {
   employee: ["read"],
 };
 
+// Per-module overrides on top of DEFAULT_ACTIONS — guard's flat "read" above
+// would otherwise 403 the exact actions the Flutter guard app exists to do
+// (open a gate, register a vehicle at it, identify an unknown detection).
+const MODULE_OVERRIDES: Partial<Record<(typeof ROLE_NAMES)[number], Record<string, string[]>>> = {
+  guard: {
+    gates: ["read", "update"],
+    vehicles: ["read", "create"],
+    unknownEntities: ["read", "update"],
+  },
+};
+
 const THEME_ROTATION: Array<{ themePalette: string; themeMode: string }> = [
   { themePalette: "oceanBlue", themeMode: "light" },
   { themePalette: "royalViolet", themeMode: "dark" },
@@ -105,6 +122,21 @@ async function upsertOne<T extends Record<string, unknown>>(
     .single();
   if (error) throw new Error(`upsert ${table} failed: ${error.message}`);
   return (data as { id: string }).id;
+}
+
+/**
+ * Every other write below returns `{ error }` too, but none of them were
+ * being checked — including the "permissions" upsert, which silently failed
+ * on every run (a partial-unique-index bug, fixed in migration 0005) while
+ * this script kept printing "✓ ... default permissions" regardless. Wrap
+ * every remaining write in this so a failure is loud, not a false "✓".
+ */
+async function checked(
+  label: string,
+  promise: PromiseLike<{ error: { message: string } | null }>,
+): Promise<void> {
+  const { error } = await promise;
+  if (error) throw new Error(`${label} failed: ${error.message}`);
 }
 
 function randomSeedPassword(): string {
@@ -164,19 +196,22 @@ async function seedCompany(
     roleIdByName.set(roleName, roleId);
 
     for (const [moduleKey, moduleId] of moduleIdByKey) {
-      await db
-        .from("permissions")
-        .upsert(
-          {
-            roleId,
-            moduleId,
-            actions: DEFAULT_ACTIONS[roleName],
-            scopeType: "company",
-            scopeIds: [],
-          } as never,
-          { onConflict: "roleId,moduleId" },
-        );
-      void moduleKey;
+      const actions = MODULE_OVERRIDES[roleName]?.[moduleKey] ?? DEFAULT_ACTIONS[roleName];
+      await checked(
+        `permissions upsert (${roleName}/${moduleKey})`,
+        db
+          .from("permissions")
+          .upsert(
+            {
+              roleId,
+              moduleId,
+              actions,
+              scopeType: "company",
+              scopeIds: [],
+            } as never,
+            { onConflict: "roleId,moduleId" },
+          ),
+      );
     }
   }
   console.log(`  ✓ ${ROLE_NAMES.length} roles + default permissions across ${moduleIdByKey.size} modules`);
@@ -194,18 +229,19 @@ async function seedCompany(
       { id: authUserId, companyId, fullName, email, isActive: true },
       "id",
     );
-    await db
-      .from("userRoles")
-      .upsert({ userId, roleId: roleIdByName.get(roleName) } as never, { onConflict: "userId,roleId" });
+    await checked(
+      `userRoles upsert (${roleName})`,
+      db.from("userRoles").upsert({ userId, roleId: roleIdByName.get(roleName) } as never, { onConflict: "userId,roleId" }),
+    );
 
     const theme = THEME_ROTATION[themeIndex % THEME_ROTATION.length];
     themeIndex += 1;
-    await db
-      .from("userPreferences")
-      .upsert(
-        { userId, themePalette: theme.themePalette, themeMode: theme.themeMode } as never,
-        { onConflict: "userId" },
-      );
+    await checked(
+      `userPreferences upsert (${roleName})`,
+      db
+        .from("userPreferences")
+        .upsert({ userId, themePalette: theme.themePalette, themeMode: theme.themeMode } as never, { onConflict: "userId" }),
+    );
 
     userIdByRole.set(roleName, userId);
     if (password) printedCreds.push(`${email}  /  ${password}`);
@@ -234,13 +270,19 @@ async function seedCompany(
           { gateId, name: `${siteName} Gate ${i} Camera ${j}` },
           "gateId,name",
         );
-        await db.from("uhfReaders").insert({
-          gateId,
-          name: `${siteName} Gate ${i} Reader ${j}`,
-          ipAddress: `10.${i}.${j}.10`,
-          port: 9000,
-          locationType: j === 1 ? "entryPoint" : "exitPoint",
-        } as never);
+        await checked(
+          `uhfReaders upsert (${siteName} Gate ${i} Reader ${j})`,
+          db.from("uhfReaders").upsert(
+            {
+              gateId,
+              name: `${siteName} Gate ${i} Reader ${j}`,
+              ipAddress: `10.${i}.${j}.10`,
+              port: 9000,
+              locationType: j === 1 ? "entryPoint" : "exitPoint",
+            } as never,
+            { onConflict: "gateId,name" },
+          ),
+        );
       }
 
       const checkpointId = await upsertOne(
@@ -249,13 +291,19 @@ async function seedCompany(
         "siteId,name",
       );
       for (let j = 1; j <= 2; j++) {
-        await db.from("uhfReaders").insert({
-          checkpointId,
-          name: `${siteName} Checkpoint ${i} Reader ${j}`,
-          ipAddress: `10.${i}.${j}.20`,
-          port: 9000,
-          locationType: "entryPoint",
-        } as never);
+        await checked(
+          `uhfReaders upsert (${siteName} Checkpoint ${i} Reader ${j})`,
+          db.from("uhfReaders").upsert(
+            {
+              checkpointId,
+              name: `${siteName} Checkpoint ${i} Reader ${j}`,
+              ipAddress: `10.${i}.${j}.20`,
+              port: 9000,
+              locationType: "entryPoint",
+            } as never,
+            { onConflict: "checkpointId,name" },
+          ),
+        );
       }
 
       const warehouseId = await upsertOne(
@@ -264,11 +312,22 @@ async function seedCompany(
         "siteId,name",
       );
       for (let j = 1; j <= 2; j++) {
-        await db.from("materials").insert({
-          warehouseId,
-          name: `${siteName} Warehouse ${i} Material ${j}`,
-          tagEpc: `MAT-${companyId.slice(0, 8)}-${i}${j}`,
-        } as never);
+        await checked(
+          // Keyed by warehouseId, not companyId: "i"/"j" restart at 1 for
+          // every site, so two sites in the same company (e.g. Magnum HQ and
+          // Magnum North) would otherwise both compute the identical
+          // "MAT-<companyId>-11" tagEpc and collide on its unique constraint
+          // — confirmed live, this broke the second site's materials entirely.
+          `materials upsert (${siteName} Warehouse ${i} Material ${j})`,
+          db.from("materials").upsert(
+            {
+              warehouseId,
+              name: `${siteName} Warehouse ${i} Material ${j}`,
+              tagEpc: `MAT-${warehouseId.slice(0, 8)}-${j}`,
+            } as never,
+            { onConflict: "warehouseId,name" },
+          ),
+        );
       }
     }
   }
@@ -291,12 +350,18 @@ async function seedCompany(
     );
   }
   for (let i = 1; i <= 2; i++) {
-    await db.from("accessories").insert({
-      userId: employeeUserId,
-      type: "accessory",
-      label: `${plan.companyName} Access Card ${i}`,
-      tagEpc: `ACC-${companyId.slice(0, 8)}-${i}`,
-    } as never);
+    await checked(
+      `accessories upsert (${plan.companyName} Access Card ${i})`,
+      db.from("accessories").upsert(
+        {
+          userId: employeeUserId,
+          type: "accessory",
+          label: `${plan.companyName} Access Card ${i}`,
+          tagEpc: `ACC-${companyId.slice(0, 8)}-${i}`,
+        } as never,
+        { onConflict: "userId,label" },
+      ),
+    );
   }
   console.log("  ✓ 2 employees, 2 accessories");
 
@@ -323,18 +388,20 @@ async function seedCompany(
     );
     // Authorized at the FIRST site/gate only — deliberately not every site/gate,
     // to demonstrate the "owning ≠ authorized everywhere" rule (§7.4) with real data.
-    await db
-      .from("vehicleSiteAuthorizations")
-      .upsert(
+    await checked(
+      `vehicleSiteAuthorizations upsert (${v.plate})`,
+      db.from("vehicleSiteAuthorizations").upsert(
         { vehicleId, siteId: siteIds[0], grantedBy: masterAdminId } as never,
         { onConflict: "vehicleId,siteId" },
-      );
-    await db
-      .from("vehicleGateAuthorizations")
-      .upsert(
+      ),
+    );
+    await checked(
+      `vehicleGateAuthorizations upsert (${v.plate})`,
+      db.from("vehicleGateAuthorizations").upsert(
         { vehicleId, gateId: gateIds[0], grantedBy: masterAdminId } as never,
         { onConflict: "vehicleId,gateId" },
-      );
+      ),
+    );
   }
   console.log("  ✓ 2 vehicles (1 four-wheeler, 1 two-wheeler), each authorized for 1 site + 1 gate only");
 }

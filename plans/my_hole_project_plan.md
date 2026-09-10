@@ -1,19 +1,22 @@
 # UHF RFID Reader Application — Full Project Analysis Transcript
 
-**Date of analysis:** 2026-09-06
-**Scope:** Read-only analysis of all four sub-projects under `uhf_rfid_reader_application_old/`. No source files were modified.
+**Date of analysis:** 2026-09-06 (initial four sub-projects), extended 2026-09-07 (two more discovered)
+**Scope:** Read-only analysis of all six sub-projects under `uhf_rfid_reader_application_old/`. No source files were modified.
 **Root path:** `/Users/santosh/Documents/Santosh/santosh_workspace/uhf_rfid_reader_application_old/`
 
 **Update log:**
 - 2026-09-06 (initial) — Sections 0–6: read-only analysis of the four existing sub-projects.
 - 2026-09-06 (update) — Section 7 added: new **planned feature roadmap** (RBAC, org hierarchy, vehicle governance, unknown-entity detection workflow, camera/UHF capture pipeline) requested for the **next build**, targeting both a **web app** and a **Flutter mobile app**. This is forward-looking product requirement capture, not analysis of existing code — kept clearly separate from Sections 0–6.
 - 2026-09-06 (update) — Section 8 added: the **master technical architecture plan** for the new build (system design, RBAC/permission engine, repo layout, phased roadmap), plus **API documentation & security middleware standards** and a **full theming system** (violet/blue palette family, ≥5 combinations, light + dark) requested as durable, always-applied engineering standards for `web_app/`.
+- 2026-09-06/07 — `web_app/` Phase 0/1 actually built (schema + seed, theme system, auth/RBAC middleware, admin shell and Dashboard/Tag Detection/Readers/Organization/Vehicles/Unknown Entities/Users & Roles/Settings screens, permission-matrix editor, vehicle site/gate authorization writes). Tracked in git history, not narrated here — this document stays the plan, not a build log.
+- 2026-09-07 (update) — Two more legacy sub-projects discovered under `uhf_rfid_reader_application_old/` (§4.5 `UHFReaderUtility`, §4.6 `UHFTagWrite_WEB`) — Executive Summary and §5 Cross-Project Synthesis updated accordingly. §7.8 added: `UHFTagWrite_WEB` turned out to be a **real, working Tag Writing/hardware-encoding backend** (the feature every newer prototype only ever simulated), with a genuine reader wire protocol, a deterministic EPC-composition formula, and a write-audit/tag-registry data pattern not documented anywhere else in this workspace — captured as implications for the new build's future Tag Writing module, not yet implemented.
+- 2026-09-07 (update) — §7.9 added: five new realtime/hardware requirements given directly by the user — location-scoped and reader-scoped socket rooms (reusing the existing permission-scoping mechanism), a gate busy/available status machine gating auto-open (Redis-backed, TTL safety net), a `vehicleVisits` arrival/dispatch pairing table for dwell-time history, and a unified search resolver so history lookup works from an employee name/code, asset name, or vehicle plate instead of requiring the raw EPC. Schema block in §8.2 updated (`vehicleVisits`, `vehicleDetections.direction`, `cameras.locationType`); §8.1 and §8.6 cross-referenced. Not yet implemented.
 
 ---
 
 ## 0. Executive Summary
 
-This workspace contains **four separate, loosely-related sub-projects** that together represent the evolution of a single product: an enterprise **UHF RFID access-control and asset/vehicle-tracking system** (product name appears to be **"AIRIS"**, built by a company referred to as **Aether**). They share a common SQL Server schema (`AIRIS_JAFAR` / `AIRIS` / `COSEC`) and a common domain model (Employees, Vehicles, Assets, Readers, Gates, Tags), but are **not currently wired together as one running system** — each was clearly built at a different time, by a different iteration of the team/tooling, and several contain unfinished, simulated, or dead code.
+This workspace contains **six separate, loosely-related sub-projects** (four originally analyzed, plus two more found 2026-09-07 — §4.5, §4.6) that together represent the evolution of a single product: an enterprise **UHF RFID access-control and asset/vehicle-tracking system** (product name appears to be **"AIRIS"**, built by a company referred to as **Aether**). They share a common SQL Server schema (`AIRIS_JAFAR` / `AIRIS` / `COSEC`) and a common domain model (Employees, Vehicles, Assets, Readers, Gates, Tags), but are **not currently wired together as one running system** — each was clearly built at a different time, by a different iteration of the team/tooling, and several contain unfinished, simulated, or dead code.
 
 | # | Sub-project | Role | Stack | Maturity |
 |---|---|---|---|---|
@@ -21,15 +24,18 @@ This workspace contains **four separate, loosely-related sub-projects** that tog
 | 2 | `UHFReaderFlow` | Web dashboard + ingestion gateway, Replit-scaffolded | Node.js/TypeScript, Express, React 18 + Vite, Wouter, TanStack Query, shadcn/ui | Functionally rich UI, but backend is largely **simulated** (fake data generator, stubbed gate/ID-card actions) and uses flat-file JSON storage, not a real DB |
 | 3 | `rfid-dashboard` | Operator-facing live dashboard + vehicle gate/CCTV terminal (pure frontend client) | React 19 + Vite, socket.io-client, hls.js | Live path is functional and connects to a real Socket.IO gateway; ~20% of the codebase is a dead, unstyled "V2" rewrite attempt |
 | 4 | `uhf-reader-dashboard` | Simple admin CRUD console for master data (readers/gates/vehicles/tag binding) | Python Flask, pyodbc (SQL Server), vanilla JS/HTML | Smallest, oldest-looking, prototype-grade; no auth, no `.env`, hardcoded credentials |
+| 5 | `UHFReaderUtility` | Alternate C# reader bridge — TCP poll loop pushing detected EPCs to a local WebSocket | .NET (net10.0) console app, Newtonsoft.Json, Websocket.Client | Minimal, single-file, no DB/gate integration; redundant with `UHF Python`'s job, less complete |
+| 6 | `UHFTagWrite_WEB` | **Real** tag-writing / hardware-encoding backend — the feature every newer prototype only simulated | ASP.NET Core Web API, Dapper, SQL Server (`AIRIS_JAFAR`) | Genuinely working (real write-transaction logs from June 2024); API-only, single shared-secret auth, real password-lock write sequence |
 
-**Overall picture:** The parent folder name (`..._old`) and the fragmentation across four independent stacks strongly suggest this is a **legacy/exploratory collection of prior attempts** at building the same product — likely superseded by (or a starting reference point for) a newer unified build. `UHF Python` is the most "real" backend (actual TCP hardware protocol, real gate relay HTTP calls, real DB writes). `rfid-dashboard`'s live pages appear to be the frontend actually paired with it (matching Socket.IO event names like `tag_event`, `bind_tag`, `request_tag_history`, and gate CGI relay calls). `UHFReaderFlow` and `uhf-reader-dashboard` look like separate, disconnected/earlier prototypes that were never fully integrated with the real hardware layer.
+**Overall picture:** The parent folder name (`..._old`) and the fragmentation across six independent stacks strongly suggest this is a **legacy/exploratory collection of prior attempts** at building the same product — likely superseded by (or a starting reference point for) a newer unified build. `UHF Python` is the most "real" backend for live tag *reading* (actual TCP hardware protocol, real gate relay HTTP calls, real DB writes); `UHFTagWrite_WEB` is the most "real" backend for tag *writing* (§4.6) — the two were apparently never merged into one service. `rfid-dashboard`'s live pages appear to be the frontend actually paired with `UHF Python` (matching Socket.IO event names like `tag_event`, `bind_tag`, `request_tag_history`, and gate CGI relay calls). `UHFReaderFlow` and `uhf-reader-dashboard` look like separate, disconnected/earlier prototypes that were never fully integrated with the real hardware layer, and their "Tag Writing" UI (§2) was built without ever being wired to `UHFTagWrite_WEB`'s real endpoint. `UHFReaderUtility` (§4.5) is a third, redundant attempt at the same job `UHF Python`'s TCP listener already does.
 
 **Cross-cutting concerns found in nearly every sub-project:**
-- Hardcoded credentials committed to source (DB passwords, RTSP camera passwords) in 3 of 4 sub-projects.
-- No authentication/authorization anywhere in the entire system.
-- Significant dead/duplicate code (legacy procedural Python file duplicating the OOP one; a whole unused "V2" React UI cluster; unused ORM/auth dependencies).
+- Hardcoded credentials committed to source (DB passwords, RTSP camera passwords, a SQL `sa` password in `UHFTagWrite_WEB/appsettings.json`) in 5 of 6 sub-projects.
+- No authentication/authorization anywhere in the entire system beyond single shared secrets (an API key GUID, or nothing at all).
+- Significant dead/duplicate code (legacy procedural Python file duplicating the OOP one; a whole unused "V2" React UI cluster; unused ORM/auth dependencies; a redundant C# reader bridge; unused GenericHid USB boilerplate wired into DI but never called).
 - Documentation drift — several markdown docs describe an earlier or different version of the code than what's actually present.
-- No automated tests anywhere across all four sub-projects.
+- No automated tests anywhere across all six sub-projects.
+- **At least three mutually incompatible UHF reader wire protocols** exist across this workspace (`UHF Python`'s `0xBB`-framed protocol, `UHFReaderUtility`'s two candidate protocols, `UHFTagWrite_WEB`'s `0x50`-command CRC-16 protocol) with no note anywhere confirming which physical reader hardware each actually targets — flagged as an open item in §8.9.
 
 ---
 
@@ -281,6 +287,72 @@ uhf-reader-dashboard/           (drwx------, restricted permissions)
 
 ---
 
+## 4.5 `UHFReaderUtility` — Alternate C# Reader Bridge (added 2026-09-07)
+
+**Path:** `UHFReaderUtility/`
+
+### Purpose
+A minimal Windows console utility (.NET) that connects directly to a UHF reader over raw TCP, polls it for tag reads, and forwards each detected EPC to a local WebSocket server as JSON. Functionally a C# alternative to `UHF Python`'s TCP listener (§1), but far simpler — no database writes, no gate logic, no caching, just "read tag → push to a websocket."
+
+### Tech Stack
+.NET (`net10.0` target), `Newtonsoft.Json`, `Websocket.Client`. Single-file console app (`Program.cs`, ~80 active lines), no project structure beyond one class.
+
+### Protocol — a third, distinct wire protocol
+Sends a fixed 4-byte poll command (`0x04 0xFF 0x21 0x19`); if the response's command byte is `0x22` (Inventory) and status byte is `0x00` (success), extracts the EPC starting 5 bytes in, with its length at byte 4. No CRC check and no framing/resync logic — a single malformed or partial TCP read would desync it permanently with no recovery.
+
+### Architecture
+One blocking loop: `TcpClient` connect → `while(true) { write poll; read response; }` — no thread, no reconnect-on-drop (an exception in the outer try/catch just prints and exits; the process needs external supervision to restart). Each detected tag opens and closes a brand-new `WebsocketClient` connection just to send that one message, rather than reusing a persistent connection — fragile and expensive under any real tag-read volume.
+
+### Notable
+The file also contains a large commented-out **alternate implementation** (~230 lines) targeting a different, more complete protocol: STX=`0xA0` framing, an XOR checksum, a 3-second anti-duplicate suppression window, and device-ID extraction — evidence the author was evaluating two different reader command sets side by side. Neither variant talks to SQL Server or any other sub-project directly; it's a standalone bridge assuming some other, undiscovered service listens on its hardcoded WebSocket port (`ws://localhost:8000`).
+
+### Key Issues Found
+- Hardcoded reader IP/port (`172.25.6.23:6000`) and WebSocket URL.
+- No reconnect logic, no error backoff, no resync-on-desync.
+- Not integrated with `AIRIS_JAFAR` or any other part of this workspace — a dead end unless paired with an undiscovered WebSocket consumer.
+- Functionally redundant with `UHF Python`'s TCP listener (§1), which is far more complete.
+
+---
+
+## 4.6 `UHFTagWrite_WEB` — Real Tag-Writing & Hardware-Encoding Backend (added 2026-09-07)
+
+**Path:** `UHFTagWrite_WEB/`
+
+### Purpose
+The genuine, previously-undocumented backend for the "Tag Writing" feature that `UHFReaderFlow`'s 4-step wizard (§2) and `uhf-reader-dashboard`'s bind-tag flow (§4) only ever simulated or partially implemented. This is a real ASP.NET Core Web API that connects to a UHF reader over TCP, computes a deterministic EPC for a new tag, writes and password-locks it on the physical tag, and records the write in the **same `AIRIS_JAFAR` SQL Server database** used by `UHF Python` and `uhf-reader-dashboard` — confirmed by an identical connection string. Oldest evidence of real activity anywhere in this workspace: genuine write-transaction log entries from June 2024.
+
+### Tech Stack
+ASP.NET Core Web API (rebuilt across several SDK versions — `bin`/`obj` show net7.0 through net10.0 artifacts), Dapper (raw SQL — no EF Core despite a stray `EntityFrameworkCore.targets` file in `obj/`), `Microsoft.Data.SqlClient`. A Dockerfile exists (multi-stage, .NET 8 base image), but the active `Program.cs` runs it as a plain Kestrel app behind API-key middleware; a third, commented-out `Program.cs` variant configures it as a **Windows Service** bound to a specific internal IP:port (`172.25.1.166:8412`) — confirming this actually ran on-prem next to a networked reader, not as a shared cloud service.
+
+### Architecture
+- **`RFIDController`** (`/api/RFID/connect`, `/disconnect`, `/query-tags`, `/write-epc-tags`) is the only real surface; `HomeController` and its Razor views are untouched ASP.NET template boilerplate — this was consumed as a pure JSON API, never given its own UI.
+- **`Common`** service holds all reader-protocol logic: a **fourth distinct UHF wire protocol**, unrelated to `UHF Python`'s `0xBB`-framed one or either of `UHFReaderUtility`'s two variants (§4.5).
+- Auth is a single shared `x-api-key` header checked against one GUID in `appsettings.json` — the same "shared secret, no user identity" pattern seen everywhere else in this legacy codebase.
+- `DeviceManagement`/`Hid`/`HidDeclarations`/`DeviceManagementDeclarations`/`FileIODeclarations` are registered in DI but never called from `RFIDController` or `Common` — recognizable as Microsoft's public "GenericHid" USB sample boilerplate. Wired up, but no traced code path actually writes to a USB HID device; all real I/O goes through `Common`'s TCP client. Worth confirming with the original author before assuming it's dead, but nothing in the call graph uses it.
+
+### The write protocol (real — evidenced by log entries)
+Frame shape: `[reserved byte, Length, Cmd_H, Cmd_L, …payload…, CRC-H, CRC-L]`, CRC-16/CCITT (poly `0x1021`) over the length+payload bytes. Commands used: `0x50 0x02` (inventory/query tags), `0x50 0x06` (write EPC), `0x50 0x04` (write a password into a memory bank), `0x50 0x07` (lock a memory bank — mem-type `0x02` locks the EPC bank, mem-type `0x00` locks the kill-password bank). A single "write" is really a **4-step hardware transaction**, each step independently fallible: write EPC → wait 1s → write access-password → wait 1s → lock the EPC bank with that password → wait 1s → lock the kill-password bank. `log_11-06-2024.txt` shows this exact sequence succeeding end-to-end against a real reader at `172.27.2.193:8080`.
+
+### The EPC composition formula (new domain knowledge — not documented anywhere else in this workspace)
+```
+EPC = FixByte + AppType + CompanyID(2 hex digits) + LocationID(2 hex digits) + SequentialTagID(6 hex digits)
+```
+- `FixByte` and the tag's `AccessPassword` are read from a **`UHF_GeneralConfig`** table (`Name`/`Val` key-value rows) — not present in `UHF Python`'s `db_manage.md` schema doc (§1).
+- `AppType` is a 4-hex-digit value from a small **`ApplicationType`** lookup table (`AppID`, `Name`, `Val`) — distinguishing which kind of entity (e.g. Employee) a tag is being issued for.
+- `CompanyID`/`LocationID` are the legacy flat `OrgCompany`/`OrgLocation` integer IDs — pre-dating this project's own richer Company→Sites→Gates/Warehouses/Checkpoints hierarchy (§7.3), confirming that hierarchy is a deliberate enrichment on the new build's part, not something to revert.
+- `SequentialTagID` is `MAX(TagRegID)+1` from a **`UHF_TagRegister`** table — also not documented elsewhere — which doubles as the write-audit log: every physical write inserts a row (`CompID`, `LocID`, `AppID`, `TAG`, `TagTypeID`, `BindStatus`, `EntDate`).
+
+### Binding is a separate step from writing
+`BindEmployeeMstRepositories.BindEmployeeUHFTagAsync` runs one SQL transaction that (a) sets `EmployeeMst.UHFTagNo` and (b) flips `UHF_TagRegister.BindStatus = true` for that tag. This is a more capable data model than the new build's current schema (§8.2's `employees.tagEpc`/`accessories.tagEpc`/`materials.tagEpc` columns conflate "a tag was physically written" with "this tag is bound to this entity" into one field) — the legacy split lets a tag be re-bound later without re-writing the hardware, and keeps a permanent write-audit trail independent of current binding. See §7.8 for the resulting implication.
+
+### Key Issues Found
+- `Common` also spins up a second `TcpListener` (on a random port) plus a background accept-thread every time `ConnectReaderAsync` runs — never read from by the actual query/write methods (which reuse the original outbound client), so it looks like leftover complexity from an earlier design rather than a real feature.
+- The `connections` dictionary is mutated from both request threads and this background listener thread without a lock (only the separate `clients` list is locked) — a latent race condition, moot if the dead listener code above is removed.
+- No automated tests.
+- Real, working hardware protocol, but otherwise as unhardened as every other legacy sub-project: shared-secret-only auth, no RBAC, a plaintext SQL `sa` password committed to `appsettings.json`.
+
+---
+
 ## 5. Cross-Project Synthesis
 
 ### How the pieces likely relate
@@ -305,19 +377,31 @@ uhf-reader-dashboard/           (drwx------, restricted permissions)
   UHFReaderFlow (Node/TS) — separate, self-contained sandbox with its OWN
   TCP:9000 listener + JSON flat-file storage + simulated data — not
   observed to share the SQL Server DB or Socket.IO surface with the others.
+
+  UHFTagWrite_WEB (ASP.NET, §4.6) — ALSO writes to "AIRIS_JAFAR" (same DB,
+  confirmed by connection string) but is a separate, standalone Web API
+  never called by any other sub-project — the real tag-WRITE backend that
+  UHF Python's TagService (read-side) was apparently never merged with.
+
+  UHFReaderUtility (C#, §4.5) — standalone; talks to neither the DB nor
+  any other sub-project. Forwards EPCs to its own undiscovered WebSocket
+  consumer. Redundant with UHF Python's TCP listener.
 ```
 
 - **`UHF Python` ↔ `rfid-dashboard`**: Strong evidence of a real pairing — identical Socket.IO event vocabulary (`tag_event`, `bind_tag`, `bind_tag_force`, `search_targets`, `request_tag_history`) and identical gate-relay CGI call pattern (`device.cgi/command?action=activateauxrelay`).
 - **`uhf-reader-dashboard` ↔ `UHF Python`**: Shares the same SQL Server schema/tables for master data (readers, gates, vehicles) — a companion admin tool, not integrated in real time (no sockets).
 - **`UHFReaderFlow`**: Architecturally isolated — its own TCP listener, its own (JSON file, not SQL Server) storage, its own simulated Socket.IO-less WebSocket layer. No evidence found that it talks to the same database or event bus as the other three. Reads as a separate prototype/experiment (Replit-scaffolded), possibly an attempted rewrite that diverged.
+- **`UHFTagWrite_WEB` ↔ `UHF Python`/`uhf-reader-dashboard`**: Shares the exact same `AIRIS_JAFAR` SQL Server database, but via its own Dapper/ADO.NET data layer, not any shared code — a third, independent client of the same schema. It is the only sub-project in this workspace that performs a **real** tag write against hardware (§4.6); nothing else calls it, and its own web UI was never built out (API-only). `UHFReaderFlow`'s Tag Writing wizard (§2) and `uhf-reader-dashboard`'s bind-tag flow (§4) both appear to have been built without knowledge of — or without ever being wired to — this real endpoint.
+- **`UHFReaderUtility`**: Fully isolated (§4.5) — no DB, no shared event bus, no callers found elsewhere in this workspace.
 
 ### System-wide risks worth flagging to the user
-1. **Hardcoded secrets in source across 3 of 4 sub-projects** (`UHF Python`, `uhf-reader-dashboard`, and RTSP credentials in `rfid-dashboard`) — should be rotated and moved to proper secrets management before any of this is deployed or made internet-facing.
-2. **No authentication/authorization anywhere in the entire system** — every REST endpoint and Socket.IO event is open to anyone who can reach the network.
+1. **Hardcoded secrets in source across 5 of 6 sub-projects** (`UHF Python`, `uhf-reader-dashboard`, `UHFTagWrite_WEB`'s SQL `sa` password, and RTSP credentials in `rfid-dashboard`) — should be rotated and moved to proper secrets management before any of this is deployed or made internet-facing.
+2. **No authentication/authorization anywhere in the entire system** beyond single shared secrets — every REST endpoint and Socket.IO event is open to anyone who can reach the network, or protected only by one static API key/password shared by every caller.
 3. **Lost ANPR source** — only recoverable from a git commit not on the active branch; worth deciding whether to resurrect it or start fresh if plate-recognition is still wanted.
-4. **`UHFReaderFlow`'s simulated/stubbed backend** (fake data generator, unwired gate relay, no-op ID-card PDF generation) means it is not currently a drop-in replacement/integration for the real hardware layer — it would need real wiring to `UHF Python`'s TCP/Socket.IO surface (or its own real hardware protocol implementation) before being production-usable.
-5. **Duplicate/dead code** in two of the four projects (`UHFMaster.py` vs `UHFServices.py`; `rfid-dashboard`'s unwired "V2" Tailwind cluster) — candidates for deletion to reduce confusion for future maintainers.
+4. **`UHFReaderFlow`'s simulated/stubbed backend** (fake data generator, unwired gate relay, no-op ID-card PDF generation, and a Tag Writing wizard never wired to `UHFTagWrite_WEB`'s real endpoint) means it is not currently a drop-in replacement/integration for the real hardware layer.
+5. **Duplicate/dead/redundant code** across four of the six projects (`UHFMaster.py` vs `UHFServices.py`; `rfid-dashboard`'s unwired "V2" Tailwind cluster; `UHFReaderUtility` duplicating `UHF Python`'s job; `UHFTagWrite_WEB`'s unused GenericHid USB boilerplate and dead second-`TcpListener` code path) — candidates for deletion to reduce confusion for future maintainers.
 6. **No tests anywhere** — any refactor or consolidation effort will need manual verification.
+7. **At least three incompatible reader wire protocols in the field** (`UHF Python`'s `0xBB` frames, `UHFReaderUtility`'s two candidate protocols, `UHFTagWrite_WEB`'s `0x50`-command CRC-16 protocol) with no documentation anywhere confirming which physical reader hardware each one actually targets — see the open item in §8.9. This needs a direct answer before `hardware-engine` (Phase 3/6) can be built with confidence.
 
 ---
 
@@ -428,6 +512,25 @@ The following were genuinely ambiguous in the original notes and have since been
 7. **User accessory model**: three categories — generic **Accessory**, **Vehicle (4-Wheeler)**, **Vehicle (2-Wheeler)**.
 8. **Planning approach**: this document (§8 below) is the **master architecture plan**. Detailed, route-by-route/screen-by-screen 11-step plans (in the style of [feature-plan.md](.claude/commands/feature-plan.md) / [feature-flutter-plan.md](.claude/commands/feature-flutter-plan.md), rewritten for this stack) are generated **module-by-module**, only when that module's build actually starts.
 
+### 7.8 Tag Writing & Hardware Encoding — Findings from `UHFTagWrite_WEB` (added 2026-09-07)
+
+Two more legacy sub-projects were found under `uhf_rfid_reader_application_old/` after the original four (§4.5 `UHFReaderUtility`, §4.6 `UHFTagWrite_WEB`). `UHFReaderUtility` doesn't change any requirement here — it's a redundant, less-complete reimplementation of a job `UHF Python`/the future `hardware-engine` already covers. `UHFTagWrite_WEB`, however, is the first **real** (not simulated) implementation of Tag Writing found anywhere in this workspace, and it changes what "Tag Writing" needs to mean in the new build. Nothing in this subsection has been implemented yet — it's captured spec/findings for whenever that module's build starts (per the planning approach in point 8 above), the same way every other not-yet-built module in §8 works.
+
+1. **Tag Writing is a real hardware feature, not just a UI wizard.** The studied web mockups' 4-step wizard (Connect → Select → Write → Confirm, §8.0) maps almost exactly onto `UHFTagWrite_WEB`'s real sequence: connect to reader → compute an EPC from the selected entity → a 4-sub-step hardware write-and-lock transaction → bind to that entity. When `hardware-engine` is built (Phase 3/6, §8.6), it should port this exact command protocol (`0x50`-family commands, CRC-16/CCITT framing) as a distinct reader-protocol variant from `UHFServices.py`'s `0xBB`-framed one. **These are two different physical reader command sets, and it is not yet confirmed whether that means two different reader hardware models are in the field, or one of the two implementations simply targets the wrong protocol for the actual hardware.** This needs a direct answer from whoever has the reader spec sheets before Phase 3 build starts (tracked as an open item in §8.9).
+2. **EPC composition must stay deterministic and configurable**, not hardcoded: `FixByte`, `AccessPassword`, and the per-entity-kind `AppType` hex value all need a config surface (mirroring the legacy `UHF_GeneralConfig`/`ApplicationType` tables, §4.6) rather than being buried in source. In the new schema this maps to a small `systemConfig` key-value table plus a lookup table for per-entity-kind `AppType` hex values (reusing or extending the `modules` registry from §8.2).
+3. **Split "tag write audit" from "tag binding."** §8.2's current schema only has a single `tagEpc` column per entity (`employees.tagEpc`, `accessories.tagEpc`, `materials.tagEpc`, and vehicles have no tag column at all). The legacy `UHF_TagRegister` pattern — one row per physical write, with its own `BindStatus`, independent of whatever it's currently bound to — is a better model and should be adopted: a `tagWriteLog` (or `uhfTagRegistry`) table recording every physical write (who wrote it, where, when, the EPC, the entity kind), with entity tables continuing to store their currently-bound `tagEpc` as a pointer into it. This gives tags the same kind of audit trail vehicle governance already requires (§7.4).
+4. **The write sequence is multi-step and independently fallible.** Any real Tag Writing UI (the web admin wizard, and the Flutter guard app's future "issue a tag" flow if one is ever added) needs to surface per-sub-step status (EPC written / password set / EPC locked / kill-password locked) rather than a single pass/fail — "Write" is really 4 hardware round-trips, and a partial failure (e.g. the password write succeeds but the lock step times out) only leaves a tag in a knowable, resumable state if each step's outcome is recorded, matching the existing Connect→Select→Write→Confirm wizard shape.
+
+### 7.9 Realtime Scoping, Gate Availability, Vehicle Visit History & Unified Search (added 2026-09-07)
+
+Five concrete requirements for the real-time/hardware layer, given directly by the user — refining `hardware-engine`/the Realtime Gateway (§8.1) and `GateService`/`HistoryService` (§1) beyond what `UHF Python` implemented. Nothing here is built yet; this is spec for whenever Phase 3/4 (§8.6) actually builds it.
+
+1. **Location-wise socket connection (task 1).** Every realtime client (web dashboard, Flutter guard app) subscribes to a **site-scoped room** (`site:<siteId>`), not one global broadcast. `hardware-engine` tags every event it produces with its site (derived from reader/camera → gate/checkpoint → site), and the Realtime Gateway fans each event out to that site's room only. A client can only join a site room its own `permissions.scopeIds` actually grant (§8.2 point 3, "Permission scoping" §7.7 point 3) — the same site/gate/warehouse scoping mechanism already used for CRUD permissions, reused here for realtime subscriptions instead of inventing a second scoping system.
+2. **Reader-wise socket connection (task 2).** A finer room level, `reader:<readerId>` — with `gate:<gateId>` as the natural mid-tier between reader and site — so a guard's live gate terminal, which only ever cares about its own lane, isn't paying the bandwidth/render cost of every event at its whole site. One physical detection is published once to Redis and fanned out to every room level it belongs to (`reader:X` or `camera:X` → `gate:Y` → `site:Z` → `company:W`); clients simply join whichever level matches what they're currently looking at, and can move between levels (e.g. a supervisor drilling from a site view into one gate) by joining/leaving rooms without reconnecting.
+3. **Gate busy/available status, with conditional auto-open (task 3).** `GateService` currently (§1) opens a gate unconditionally the moment a vehicle is authorized. The new build adds an explicit gate status machine, `available ⇄ busy`, kept **in Redis** (`gate:<gateId>:status`) — not Postgres, since this must flip in milliseconds and a stale DB row here is worse than useless — with a safety-net TTL (e.g. 15s) so a missed "closed" signal can never wedge a gate `busy` forever. On an authorized detection: if `available`, flip to `busy`, fire the relay's open command, and broadcast the status flip into the gate's room (task 2) so every guard UI watching it shows "Gate Busy" live; if already `busy`, the relay is **not** called — the detection is still recorded (nothing is silently dropped) and surfaced to the guard as a queued/waiting vehicle instead of being auto-opened. The gate returns to `available` on an explicit "closed" signal from the relay/reader, or when the TTL lapses.
+4. **Vehicle arrival/dispatch history (task 4).** A new `vehicleVisits` table (added to §8.2's schema block above) pairs an entry detection with its later exit detection into one row (`vehicleId`, `siteId`, `gateId`, `arrivalAt`/`arrivalDetectionId`, `dispatchAt`/`dispatchDetectionId`, `status: 'onSite' | 'departed'`), driven by a `direction` (`entryPoint`/`exitPoint`) that each `vehicleDetections` row now carries — copied at write time from the detecting camera's `locationType` (a new column on `cameras`, mirroring `uhfReaders.locationType` which already exists). An arrival with no open visit for that vehicle at that site opens one (`onSite`); the next dispatch for that vehicle at the same site closes it (`departed`) — giving per-visit dwell-time/duration reporting for free instead of a flat list of disconnected raw detections.
+5. **Unified history search by human identifier, not raw EPC (task 5).** Today's design (mirroring `UHF Python`'s `search_targets`) requires already knowing the raw EPC to pull history — that's the gap being closed. The new build adds one resolver step in front of it: search by employee name/code, accessory label, material name, **or vehicle plate number**, and the resolver returns each match's underlying lookup key — `tagEpc` for employees/accessories/materials, `plateNumber` for vehicles (vehicles are ANPR/plate-identified, not EPC-tagged, per §7.6) — then the history view fetches `tagDetections` (by EPC) or `vehicleDetections` (by plate, joined through the new `vehicleVisits` for arrival/dispatch pairs) transparently behind that one search box. This is exactly the backend the Tag Detection Monitor's search field (§8.5) is currently missing — today it's a static input with no resolver behind it.
+
 ---
 
 ## 8. Web Application Technical Architecture Plan (Master Plan)
@@ -496,6 +599,8 @@ flowchart TB
 
 **Key rule:** browsers and the Flutter app never talk to `hardware-engine`, Kafka, or Redis directly. Everything CRUD/business-logic goes through Next.js route handlers → services → Supabase/Redis. `hardware-engine`'s internal HTTP surface (reload config, force-bind tag, force-open gate) is called **only** from Next.js server-side service code, never from client code.
 
+**Realtime Gateway room hierarchy (§7.9 tasks 1–2):** every event fans out to `reader:<id>`/`camera:<id>` → `gate:<id>` → `site:<id>` → `company:<id>` rooms simultaneously; a client joins only the room(s) matching what it's currently viewing, and is only allowed to join a room its own `permissions.scopeIds` cover (§8.2 point 3) — realtime subscriptions reuse the CRUD permission-scoping mechanism rather than a second one. `GateService`'s busy/available state (§7.9 task 3) lives in Redis as `gate:<gateId>:status`, published into that same `gate:<id>` room on every change.
+
 **Why each piece exists**
 - **Supabase (Postgres)** — system of record: org hierarchy, users/roles/permissions, vehicles, employees, materials, accessories, detection history, audit log.
 - **Redis** — the "needs to be fast" layer: permission-matrix cache, tag-resolution/dedup cache, pub/sub fan-out for realtime UI push, **and now rate-limit counters** (§8.3).
@@ -514,11 +619,15 @@ flowchart TB
 ```
 companies            (id, name, createdAt, ...)
 sites                (id, companyId, name, ...)
-gates                (id, siteId, name, ...)
+gates                (id, siteId, name, ...)                                  -- live busy/available status is NOT a
+                                                                               -- column here — it's Redis-only, §7.9 task 3
 securityCheckpoints  (id, siteId, name, ...)
 warehouses           (id, siteId, name, ...)
 uhfReaders           (id, gateId | checkpointId, ipAddress, port, locationType, ...)
-cameras              (id, gateId, name, streamUrl, ...)
+cameras              (id, gateId, name, streamUrl, locationType, ...)          -- locationType added §7.9 task 4 (mirrors
+                                                                               -- uhfReaders' entryPoint/exitPoint) so an
+                                                                               -- ANPR detection knows its own direction
+                                                                               -- without a join back to the gate
 
 users                (id -> supabase auth.users.id, companyId, fullName, email, isActive, createdBy, createdAt)
 roles                (id, companyId, name, isSystemRole, createdBy)          -- 6 seed rows + custom roles
@@ -546,8 +655,16 @@ accessories          (id, userId, type, tagEpc, ...)                          --
 materials            (id, warehouseId, tagEpc, ...)
 
 tagDetections        (id, epc, readerId, resolvedType, resolvedId, detectedAt, signal)   -- written by workers/, high volume
-vehicleDetections    (id, plateNumber, cameraId, gateId, vehicleId?, status, detectedAt)
+vehicleDetections    (id, plateNumber, cameraId, gateId, vehicleId?, status, direction,   -- direction added §7.9 task 4:
+                       detectedAt)                                                        -- denormalized copy of the
+                                                                                           -- camera's locationType at
+                                                                                           -- write time, for fast pairing
 vehicleSnapshots     (id, vehicleDetectionId, cameraId, imageUrl, capturedAt)   -- one row per 30s tick per session
+
+vehicleVisits        (id, vehicleId, siteId, gateId,                       -- §7.9 task 4 — pairs an arrival with its
+                       arrivalAt, arrivalDetectionId,                       -- later dispatch instead of leaving two
+                       dispatchAt, dispatchDetectionId,                     -- disconnected raw detection rows; gives
+                       status)                             -- 'onSite' | 'departed'   dwell-time reporting for free
 
 unknownEntityEvents  (id, entityKind,                 -- 'employee' | 'accessory' | 'material' | 'vehicle'
                        placeholderRef, gateId | checkpointId | warehouseId,
@@ -758,9 +875,9 @@ Each phase gets its own detailed 11-step plan (adapted feature-plan/feature-flut
 |---|---|---|
 | 0 | Next.js scaffold, Supabase schema + migrations, Redis, Kafka topics, `requireUser`/`requirePermission` guards, `withApiMiddleware` (CORS + rate limit + security headers), OpenAPI registry + `/docs`, the full theme system (5 palettes × light/dark, font tokens, 1005px breakpoint), master_admin bootstrap, login page, base layout matching the web mockups | — |
 | 1 | Org hierarchy CRUD (Company/Sites/Gates/Warehouses/SecurityCheckpoints), Users + Roles + Permission-matrix admin screen, audit log | 0 |
-| 2 | Employees, Accessories, ID Cards (reuses the ID Card Generation UI concept from the mockups) | 1 |
-| 3 | `hardware-engine` (TCP:9000 listener ported from `UHFServices.py`), Kafka topics + `workers/` consumer, Readers CRUD, live Tag Detection feed, Device Monitor, System Logs — 1:1 visual reuse of the studied dashboard mockups | 1 |
-| 4 | Vehicle governance: company-level vehicle records, site/gate authorization workflow, delegation permissions (`manageSiteAuth`/`manageGateAuth`), vehicle audit trail | 1, 3 |
+| 2 | Employees, Accessories, ID Cards (reuses the ID Card Generation UI concept from the mockups), **Tag Writing** (real hardware write wizard, protocol ported from `UHFTagWrite_WEB` §4.6/§7.8 — not the simulated version) | 1 |
+| 3 | `hardware-engine` (TCP:9000 listener ported from `UHFServices.py`; add `UHFTagWrite_WEB`'s `0x50`-command write protocol per §7.8 once Phase 2's Tag Writing UI needs it), Kafka topics + `workers/` consumer, Readers CRUD, live Tag Detection feed, Device Monitor, System Logs — 1:1 visual reuse of the studied dashboard mockups. **Realtime Gateway room hierarchy + gate busy/available status machine + unified name/code/plate → history search resolver (§7.9 tasks 1, 2, 3, 5)** | 1 |
+| 4 | Vehicle governance: company-level vehicle records, site/gate authorization workflow, delegation permissions (`manageSiteAuth`/`manageGateAuth`), vehicle audit trail. **`vehicleVisits` arrival/dispatch pairing + dwell-time history (§7.9 task 4)** | 1, 3 |
 | 5 | Unknown-entity workflow: placeholder records, Redis pub/sub + realtime gateway, guard notification + identification forms (employee/accessory/material/vehicle variants) | 3, 4 |
 | 6 | Cameras + ANPR: camera registration per gate, plate recognition + vehicle-type classification (recover reference logic via `git show 6da5a5d:ANPR/*` in the old repo, rebuild cleanly), per-vehicle-session 30s snapshot capture | 4, 5 |
 | 7 | Flutter guard app: login, site/gate/door selection, live gate terminal, vehicle registration, unknown-entity inbox + identification form, full theme mirror (§8.4.4) | 3, 4, 5 |
@@ -805,3 +922,5 @@ A single script — not scattered one-off inserts — that stands up a fully pop
 - Whether Supabase Auth alone is sufficient or a lightweight custom JWT claims hook is needed for the RLS policies in §8.2 — decide during Phase 0/1.
 - FCM/background push for guard notifications — explicitly deferred past Phase 5.
 - Confirm the exact CSP directives once third-party embeds (camera HLS players, etc.) are known in Phase 6 — the Phase 0 CSP will start restrictive (`default-src 'self'`) and only widen with a documented reason per directive.
+- **Which physical reader hardware is actually in the field** (added 2026-09-07, §4.5/§4.6/§7.8): at least three incompatible wire protocols exist across the legacy sub-projects (`UHFServices.py`'s `0xBB` frames, `UHFReaderUtility`'s two candidate protocols, `UHFTagWrite_WEB`'s `0x50`-command/CRC-16 protocol). Confirm with whoever has the reader spec sheets whether these represent different reader models deployed at different sites, or whether some of these implementations simply target the wrong protocol — needed before `hardware-engine` (Phase 3) is built, since it must support whichever protocol(s) are actually live.
+- **Tag write/bind schema split** (added 2026-09-07, §7.8): decide during whichever phase builds real Tag Writing whether to add a `tagWriteLog`/`uhfTagRegistry` audit table (mirroring the legacy `UHF_TagRegister` pattern) alongside the existing per-entity `tagEpc` columns, and a `systemConfig` key-value table for `FixByte`/`AccessPassword`-style tunables (mirroring `UHF_GeneralConfig`) instead of hardcoding them.

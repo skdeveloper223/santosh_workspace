@@ -35,6 +35,13 @@ dependencies:
   # Use with the CupertinoIcons class for iOS style icons.
   cupertino_icons: ^1.0.8
 
+  # AIRIS guard app (plans/my_hole_project_plan.md §7.7, §8.0, §8.4.4, §8.5):
+  supabase_flutter: ^2.8.0 # Auth only — all data/business logic goes through web_app's Next.js API (§7.7 point 1)
+  http: ^1.2.2 # REST calls to web_app's API routes
+  socket_io_client: ^3.0.2 # Realtime Gateway client (§7.9, §8.1)
+  shared_preferences: ^2.3.3 # persists site/gate/door + theme choice across restarts (§8.7 Phase 7)
+  provider: ^6.1.2 # app-wide auth/session/theme state
+
 dev_dependencies:
   flutter_test:
     sdk: flutter
