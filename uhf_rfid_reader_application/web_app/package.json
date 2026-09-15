@@ -8,6 +8,8 @@
     "start": "next start",
     "lint": "eslint",
     "seed": "tsx scripts/seed.ts",
+    "db:clean": "tsx scripts/clean-db.ts",
+    "seed:clean": "tsx scripts/clean-db.ts && tsx scripts/seed.ts",
     "dev:realtime": "tsx watch realtime-gateway/index.ts"
   },
   "dependencies": {

@@ -4,29 +4,25 @@
  * One run produces, per company ("Magnum" and "Ascend" — reusing the site names
  * from the studied mobile mockups):
  *   - 6 roles (master_admin, admin, hr, supervisor, guard, employee) + default permissions
- *   - 1 Supabase Auth user per role (12 users total across both companies)
+ *   - 1 Supabase Auth user per role (12 users total across both companies) with role-based default passwords (${role}@123)
  *   - 2 sites; per site: 2 gates, 2 warehouses, 2 securityCheckpoints
  *   - per gate: 2 cameras, 2 uhfReaders; per checkpoint: 2 uhfReaders; per warehouse: 2 materials
  *   - 2 employees + 2 accessories
  *   - 2 vehicles (one 4-wheeler, one 2-wheeler) with a site + gate authorization each
+ *   - Full dummy test data for ALL remaining tables: tagDetections, vehicleDetections,
+ *     vehicleSnapshots, vehicleVisits, unknownEntityEvents, and auditLog.
  *
- * Idempotent: every insert is an upsert keyed on a natural/business key, so
- * re-running `npm run seed` after a schema change updates rather than duplicates.
+ * Idempotent: every insert is an upsert keyed on a natural/business key, or safely cleared/inserted.
  *
  * Requires: SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY (service role — never the
- * anon key, since this creates Auth users directly). Needs the migration in
- * supabase/migrations/0001_init_schema.sql already applied to that project.
+ * anon key, since this creates Auth users directly). Needs migrations applied.
  *
  * Run with: npm run seed
  */
-// `dotenv/config` on its own only loads ".env" — this project (like Next.js
-// itself) keeps real values in ".env.local" instead, so both are loaded
-// explicitly here, in Next's own precedence order (.env.local wins).
 import { config as loadEnv } from "dotenv";
 loadEnv({ path: ".env" });
 loadEnv({ path: ".env.local", override: true });
 
-import { randomBytes } from "node:crypto";
 import { createClient } from "@supabase/supabase-js";
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
@@ -69,7 +65,6 @@ const MODULES: Array<{ key: string; label: string }> = [
   { key: "apiDocs", label: "API Docs" },
 ];
 
-// Illustrative defaults only — the real matrix is an open item (§8.9).
 const DEFAULT_ACTIONS: Record<(typeof ROLE_NAMES)[number], string[]> = {
   master_admin: ["create", "read", "update", "delete", "manageSiteAuth", "manageGateAuth"],
   admin: ["create", "read", "update", "delete"],
@@ -79,9 +74,6 @@ const DEFAULT_ACTIONS: Record<(typeof ROLE_NAMES)[number], string[]> = {
   employee: ["read"],
 };
 
-// Per-module overrides on top of DEFAULT_ACTIONS — guard's flat "read" above
-// would otherwise 403 the exact actions the Flutter guard app exists to do
-// (open a gate, register a vehicle at it, identify an unknown detection).
 const MODULE_OVERRIDES: Partial<Record<(typeof ROLE_NAMES)[number], Record<string, string[]>>> = {
   guard: {
     gates: ["read", "update"],
@@ -106,8 +98,7 @@ const COMPANY_PLANS: CompanyPlan[] = [
 ];
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Small upsert-by-natural-key helper (Supabase's upsert() needs a unique
-// constraint target, which every table below already has).
+// Database Helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
 async function upsertOne<T extends Record<string, unknown>>(
@@ -124,13 +115,6 @@ async function upsertOne<T extends Record<string, unknown>>(
   return (data as { id: string }).id;
 }
 
-/**
- * Every other write below returns `{ error }` too, but none of them were
- * being checked — including the "permissions" upsert, which silently failed
- * on every run (a partial-unique-index bug, fixed in migration 0005) while
- * this script kept printing "✓ ... default permissions" regardless. Wrap
- * every remaining write in this so a failure is loud, not a false "✓".
- */
 async function checked(
   label: string,
   promise: PromiseLike<{ error: { message: string } | null }>,
@@ -139,9 +123,39 @@ async function checked(
   if (error) throw new Error(`${label} failed: ${error.message}`);
 }
 
-function randomSeedPassword(): string {
-  // Dev/demo only — printed to console, never written to a file or committed.
-  return `Seed-${randomBytes(6).toString("hex")}!`;
+/**
+ * Task 1: Set role-based default passwords matching `${roleName}@123`
+ * E.g. master_admin@123, admin@123, hr@123, supervisor@123, guard@123, employee@123
+ */
+async function ensureAuthUser(
+  email: string,
+  fullName: string,
+  roleName: string,
+): Promise<{ id: string; password: string }> {
+  const password = `${roleName}@123`;
+  const { data: existing, error: listErr } = await db.auth.admin.listUsers({ page: 1, perPage: 1000 });
+  if (listErr) throw new Error(`listUsers failed: ${listErr.message}`);
+
+  const found = existing.users.find((u) => u.email?.toLowerCase() === email.toLowerCase());
+
+  if (found) {
+    // Ensure password is updated to the default password pattern
+    const { error: updateErr } = await db.auth.admin.updateUserById(found.id, {
+      password,
+      user_metadata: { fullName },
+    });
+    if (updateErr) throw new Error(`updateUserById(${email}) failed: ${updateErr.message}`);
+    return { id: found.id, password };
+  }
+
+  const { data: created, error: createErr } = await db.auth.admin.createUser({
+    email,
+    password,
+    email_confirm: true,
+    user_metadata: { fullName },
+  });
+  if (createErr) throw new Error(`createUser(${email}) failed: ${createErr.message}`);
+  return { id: created.user.id, password };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -156,25 +170,6 @@ async function seedModules(): Promise<Map<string, string>> {
   }
   console.log(`✓ modules registry (${MODULES.length} rows)`);
   return idByKey;
-}
-
-async function ensureAuthUser(email: string, fullName: string): Promise<{ id: string; password?: string }> {
-  // listUsers + filter by email keeps this idempotent — admin.createUser() errors
-  // on a duplicate email, and there's no direct getUserByEmail in supabase-js v2.
-  const { data: existing, error: listErr } = await db.auth.admin.listUsers({ page: 1, perPage: 1000 });
-  if (listErr) throw new Error(`listUsers failed: ${listErr.message}`);
-  const found = existing.users.find((u) => u.email?.toLowerCase() === email.toLowerCase());
-  if (found) return { id: found.id };
-
-  const password = randomSeedPassword();
-  const { data: created, error: createErr } = await db.auth.admin.createUser({
-    email,
-    password,
-    email_confirm: true,
-    user_metadata: { fullName },
-  });
-  if (createErr) throw new Error(`createUser(${email}) failed: ${createErr.message}`);
-  return { id: created.user.id, password };
 }
 
 async function seedCompany(
@@ -222,7 +217,7 @@ async function seedCompany(
   for (const roleName of ROLE_NAMES) {
     const email = `${roleName}@${plan.companyName.toLowerCase().replace(/\s+/g, "")}.airis.dev`;
     const fullName = `${plan.companyName} ${roleName.replace("_", " ")}`;
-    const { id: authUserId, password } = await ensureAuthUser(email, fullName);
+    const { id: authUserId, password } = await ensureAuthUser(email, fullName, roleName);
 
     const userId = await upsertOne(
       "users",
@@ -244,13 +239,18 @@ async function seedCompany(
     );
 
     userIdByRole.set(roleName, userId);
-    if (password) printedCreds.push(`${email}  /  ${password}`);
+    printedCreds.push(`${email}  /  ${password}`);
   }
-  console.log(`  ✓ ${ROLE_NAMES.length} users (one per role)`);
+  console.log(`  ✓ ${ROLE_NAMES.length} users (one per role with default password \${role}@123)`);
 
   // --- Hierarchy: 2 sites, each with 2 gates / 2 warehouses / 2 checkpoints ---
   const siteIds: string[] = [];
   const gateIds: string[] = [];
+  const cameraIds: string[] = [];
+  const readerIds: string[] = [];
+  const checkpointIds: string[] = [];
+  const warehouseIds: string[] = [];
+  const materialInfoList: Array<{ id: string; epc: string }> = [];
 
   for (const siteName of plan.siteNames) {
     const siteId = await upsertOne("sites", { companyId, name: siteName }, "companyId,name");
@@ -265,24 +265,29 @@ async function seedCompany(
       gateIds.push(gateId);
 
       for (let j = 1; j <= 2; j++) {
-        await upsertOne(
+        const camId = await upsertOne(
           "cameras",
-          { gateId, name: `${siteName} Gate ${i} Camera ${j}` },
+          {
+            gateId,
+            name: `${siteName} Gate ${i} Camera ${j}`,
+            locationType: j === 1 ? "entryPoint" : "exitPoint",
+          },
           "gateId,name",
         );
-        await checked(
-          `uhfReaders upsert (${siteName} Gate ${i} Reader ${j})`,
-          db.from("uhfReaders").upsert(
-            {
-              gateId,
-              name: `${siteName} Gate ${i} Reader ${j}`,
-              ipAddress: `10.${i}.${j}.10`,
-              port: 9000,
-              locationType: j === 1 ? "entryPoint" : "exitPoint",
-            } as never,
-            { onConflict: "gateId,name" },
-          ),
+        cameraIds.push(camId);
+
+        const rdrId = await upsertOne(
+          "uhfReaders",
+          {
+            gateId,
+            name: `${siteName} Gate ${i} Reader ${j}`,
+            ipAddress: `10.${i}.${j}.10`,
+            port: 9000,
+            locationType: j === 1 ? "entryPoint" : "exitPoint",
+          },
+          "gateId,name",
         );
+        readerIds.push(rdrId);
       }
 
       const checkpointId = await upsertOne(
@@ -290,20 +295,21 @@ async function seedCompany(
         { siteId, name: `${siteName} Checkpoint ${i}` },
         "siteId,name",
       );
+      checkpointIds.push(checkpointId);
+
       for (let j = 1; j <= 2; j++) {
-        await checked(
-          `uhfReaders upsert (${siteName} Checkpoint ${i} Reader ${j})`,
-          db.from("uhfReaders").upsert(
-            {
-              checkpointId,
-              name: `${siteName} Checkpoint ${i} Reader ${j}`,
-              ipAddress: `10.${i}.${j}.20`,
-              port: 9000,
-              locationType: "entryPoint",
-            } as never,
-            { onConflict: "checkpointId,name" },
-          ),
+        const rdrId = await upsertOne(
+          "uhfReaders",
+          {
+            checkpointId,
+            name: `${siteName} Checkpoint ${i} Reader ${j}`,
+            ipAddress: `10.${i}.${j}.20`,
+            port: 9000,
+            locationType: "entryPoint",
+          },
+          "checkpointId,name",
         );
+        readerIds.push(rdrId);
       }
 
       const warehouseId = await upsertOne(
@@ -311,32 +317,31 @@ async function seedCompany(
         { siteId, name: `${siteName} Warehouse ${i}` },
         "siteId,name",
       );
+      warehouseIds.push(warehouseId);
+
       for (let j = 1; j <= 2; j++) {
-        await checked(
-          // Keyed by warehouseId, not companyId: "i"/"j" restart at 1 for
-          // every site, so two sites in the same company (e.g. Magnum HQ and
-          // Magnum North) would otherwise both compute the identical
-          // "MAT-<companyId>-11" tagEpc and collide on its unique constraint
-          // — confirmed live, this broke the second site's materials entirely.
-          `materials upsert (${siteName} Warehouse ${i} Material ${j})`,
-          db.from("materials").upsert(
-            {
-              warehouseId,
-              name: `${siteName} Warehouse ${i} Material ${j}`,
-              tagEpc: `MAT-${warehouseId.slice(0, 8)}-${j}`,
-            } as never,
-            { onConflict: "warehouseId,name" },
-          ),
+        const tagEpc = `MAT-${warehouseId.slice(0, 8)}-${j}`;
+        const matId = await upsertOne(
+          "materials",
+          {
+            warehouseId,
+            name: `${siteName} Warehouse ${i} Material ${j}`,
+            tagEpc,
+          },
+          "warehouseId,name",
         );
+        materialInfoList.push({ id: matId, epc: tagEpc });
       }
     }
   }
   console.log(`  ✓ 2 sites, each with 2 gates (2 cameras + 2 readers each), 2 checkpoints (2 readers each), 2 warehouses (2 materials each)`);
 
-  // --- Employees + accessories (linked to the guard/employee seed users) ---
+  // --- Employees + accessories ---
   const employeeUserId = userIdByRole.get("employee")!;
+  const employeeInfoList: Array<{ id: string; epc: string }> = [];
   for (let i = 1; i <= 2; i++) {
-    await upsertOne(
+    const tagEpc = `EMP-${companyId.slice(0, 8)}-${i}`;
+    const empId = await upsertOne(
       "employees",
       {
         companyId,
@@ -344,34 +349,39 @@ async function seedCompany(
         employeeCode: `${plan.companyName.slice(0, 3).toUpperCase()}-EMP-00${i}`,
         name: `${plan.companyName} Employee ${i}`,
         department: i === 1 ? "Operations" : "Facilities",
-        tagEpc: `EMP-${companyId.slice(0, 8)}-${i}`,
+        tagEpc,
       },
       "companyId,employeeCode",
     );
+    employeeInfoList.push({ id: empId, epc: tagEpc });
   }
+
+  const accessoryInfoList: Array<{ id: string; epc: string }> = [];
   for (let i = 1; i <= 2; i++) {
-    await checked(
-      `accessories upsert (${plan.companyName} Access Card ${i})`,
-      db.from("accessories").upsert(
-        {
-          userId: employeeUserId,
-          type: "accessory",
-          label: `${plan.companyName} Access Card ${i}`,
-          tagEpc: `ACC-${companyId.slice(0, 8)}-${i}`,
-        } as never,
-        { onConflict: "userId,label" },
-      ),
+    const tagEpc = `ACC-${companyId.slice(0, 8)}-${i}`;
+    const accId = await upsertOne(
+      "accessories",
+      {
+        userId: employeeUserId,
+        type: "accessory",
+        label: `${plan.companyName} Access Card ${i}`,
+        tagEpc,
+      },
+      "userId,label",
     );
+    accessoryInfoList.push({ id: accId, epc: tagEpc });
   }
   console.log("  ✓ 2 employees, 2 accessories");
 
-  // --- Vehicles: one 4-wheeler, one 2-wheeler, each authorized at 1 site + 1 gate ---
+  // --- Vehicles ---
   const ownerUserId = userIdByRole.get("supervisor")!;
   const masterAdminId = userIdByRole.get("master_admin")!;
   const vehicleDefs: Array<{ plate: string; type: string }> = [
     { plate: `${plan.companyName.slice(0, 2).toUpperCase()}-4W-001`, type: "4-wheeler" },
     { plate: `${plan.companyName.slice(0, 2).toUpperCase()}-2W-001`, type: "2-wheeler" },
   ];
+  const vehicleInfoList: Array<{ id: string; plate: string }> = [];
+
   for (const v of vehicleDefs) {
     const vehicleId = await upsertOne(
       "vehicles",
@@ -386,8 +396,8 @@ async function seedCompany(
       },
       "companyId,plateNumber",
     );
-    // Authorized at the FIRST site/gate only — deliberately not every site/gate,
-    // to demonstrate the "owning ≠ authorized everywhere" rule (§7.4) with real data.
+    vehicleInfoList.push({ id: vehicleId, plate: v.plate });
+
     await checked(
       `vehicleSiteAuthorizations upsert (${v.plate})`,
       db.from("vehicleSiteAuthorizations").upsert(
@@ -404,10 +414,202 @@ async function seedCompany(
     );
   }
   console.log("  ✓ 2 vehicles (1 four-wheeler, 1 two-wheeler), each authorized for 1 site + 1 gate only");
+
+  // ───────────────────────────────────────────────────────────────────────────
+  // Task 4: Additional Dummy Data for testing ALL remaining tables
+  // ─────────────────────────────────────────────────────────────────────────
+
+  // 1. tagDetections (Employee, Material, Accessory, Unknown tag scans)
+  const now = new Date();
+  const readerId = readerIds[0];
+  const sampleDetections = [
+    {
+      epc: employeeInfoList[0].epc,
+      readerId,
+      resolvedType: "employee",
+      resolvedId: employeeInfoList[0].id,
+      detectedAt: new Date(now.getTime() - 1000 * 60 * 30).toISOString(),
+      signal: -45,
+    },
+    {
+      epc: materialInfoList[0].epc,
+      readerId,
+      resolvedType: "material",
+      resolvedId: materialInfoList[0].id,
+      detectedAt: new Date(now.getTime() - 1000 * 60 * 20).toISOString(),
+      signal: -52,
+    },
+    {
+      epc: accessoryInfoList[0].epc,
+      readerId,
+      resolvedType: "accessory",
+      resolvedId: accessoryInfoList[0].id,
+      detectedAt: new Date(now.getTime() - 1000 * 60 * 10).toISOString(),
+      signal: -48,
+    },
+    {
+      epc: `UNK-${companyId.slice(0, 8)}-99`,
+      readerId,
+      resolvedType: null,
+      resolvedId: null,
+      detectedAt: new Date(now.getTime() - 1000 * 60 * 5).toISOString(),
+      signal: -65,
+    },
+  ];
+
+  for (const det of sampleDetections) {
+    await checked(`tagDetections insert (${det.epc})`, db.from("tagDetections").insert(det as never));
+  }
+  console.log("  ✓ tagDetections dummy records inserted");
+
+  // 2. vehicleDetections & vehicleSnapshots
+  const cameraId = cameraIds[0];
+  const gateId = gateIds[0];
+
+  const arrivalDetId = await upsertOne(
+    "vehicleDetections",
+    {
+      plateNumber: vehicleInfoList[0].plate,
+      cameraId,
+      gateId,
+      vehicleId: vehicleInfoList[0].id,
+      status: "authorized",
+      direction: "entryPoint",
+      detectedAt: new Date(now.getTime() - 1000 * 60 * 60 * 2).toISOString(),
+    },
+    "id",
+  );
+
+  const dispatchDetId = await upsertOne(
+    "vehicleDetections",
+    {
+      plateNumber: vehicleInfoList[0].plate,
+      cameraId,
+      gateId,
+      vehicleId: vehicleInfoList[0].id,
+      status: "authorized",
+      direction: "exitPoint",
+      detectedAt: new Date(now.getTime() - 1000 * 60 * 30).toISOString(),
+    },
+    "id",
+  );
+
+  const activeArrivalDetId = await upsertOne(
+    "vehicleDetections",
+    {
+      plateNumber: vehicleInfoList[1].plate,
+      cameraId,
+      gateId,
+      vehicleId: vehicleInfoList[1].id,
+      status: "authorized",
+      direction: "entryPoint",
+      detectedAt: new Date(now.getTime() - 1000 * 60 * 15).toISOString(),
+    },
+    "id",
+  );
+
+  // Snapshots for vehicle detections
+  await checked(
+    `vehicleSnapshots insert (${vehicleInfoList[0].plate})`,
+    db.from("vehicleSnapshots").insert([
+      {
+        vehicleDetectionId: arrivalDetId,
+        cameraId,
+        imageUrl: `https://airis.dev/snapshots/${vehicleInfoList[0].plate}-entry.jpg`,
+        capturedAt: new Date(now.getTime() - 1000 * 60 * 60 * 2).toISOString(),
+      },
+      {
+        vehicleDetectionId: dispatchDetId,
+        cameraId,
+        imageUrl: `https://airis.dev/snapshots/${vehicleInfoList[0].plate}-exit.jpg`,
+        capturedAt: new Date(now.getTime() - 1000 * 60 * 30).toISOString(),
+      },
+    ] as never),
+  );
+  console.log("  ✓ vehicleDetections & vehicleSnapshots dummy records inserted");
+
+  // 3. vehicleVisits (1 completed visit 'departed', 1 active visit 'onSite')
+  await checked(
+    `vehicleVisits insert (departed & onSite)`,
+    db.from("vehicleVisits").insert([
+      {
+        vehicleId: vehicleInfoList[0].id,
+        siteId: siteIds[0],
+        gateId,
+        arrivalAt: new Date(now.getTime() - 1000 * 60 * 60 * 2).toISOString(),
+        arrivalDetectionId: arrivalDetId,
+        dispatchAt: new Date(now.getTime() - 1000 * 60 * 30).toISOString(),
+        dispatchDetectionId: dispatchDetId,
+        status: "departed",
+      },
+      {
+        vehicleId: vehicleInfoList[1].id,
+        siteId: siteIds[0],
+        gateId,
+        arrivalAt: new Date(now.getTime() - 1000 * 60 * 15).toISOString(),
+        arrivalDetectionId: activeArrivalDetId,
+        status: "onSite",
+      },
+    ] as never),
+  );
+  console.log("  ✓ vehicleVisits dummy records inserted");
+
+  // 4. unknownEntityEvents (1 pending, 1 identified)
+  const guardUserId = userIdByRole.get("guard")!;
+  await checked(
+    `unknownEntityEvents insert`,
+    db.from("unknownEntityEvents").insert([
+      {
+        entityKind: "vehicle",
+        placeholderRef: `UNK-PLATE-${plan.companyName.slice(0, 3)}-01`,
+        gateId,
+        status: "pending",
+        createdAt: new Date(now.getTime() - 1000 * 60 * 45).toISOString(),
+      },
+      {
+        entityKind: "employee",
+        placeholderRef: `UNK-TAG-${plan.companyName.slice(0, 3)}-02`,
+        checkpointId: checkpointIds[0],
+        status: "identified",
+        assignedGuardUserId: guardUserId,
+        identifiedAsId: employeeInfoList[0].id,
+        identifiedAt: new Date(now.getTime() - 1000 * 60 * 10).toISOString(),
+        createdAt: new Date(now.getTime() - 1000 * 60 * 90).toISOString(),
+      },
+    ] as never),
+  );
+  console.log("  ✓ unknownEntityEvents dummy records inserted");
+
+  // 5. auditLog
+  const adminUserId = userIdByRole.get("admin")!;
+  await checked(
+    `auditLog insert`,
+    db.from("auditLog").insert([
+      {
+        actorUserId: adminUserId,
+        action: "AUTH_LOGIN",
+        moduleKey: "users",
+        targetId: adminUserId,
+        before: null,
+        after: { email: `${plan.companyName.toLowerCase()}@airis.dev`, status: "success" },
+        at: new Date(now.getTime() - 1000 * 60 * 120).toISOString(),
+      },
+      {
+        actorUserId: masterAdminId,
+        action: "GRANT_VEHICLE_GATE_AUTH",
+        moduleKey: "vehicles",
+        targetId: vehicleInfoList[0].id,
+        before: { authorizedGates: [] },
+        after: { gateId },
+        at: new Date(now.getTime() - 1000 * 60 * 100).toISOString(),
+      },
+    ] as never),
+  );
+  console.log("  ✓ auditLog dummy records inserted");
 }
 
 async function main() {
-  console.log("Seeding AIRIS-Next dev/demo dataset...");
+  console.log("Seeding AIRIS-Next dev/demo dataset with default passwords and dummy data...");
   const moduleIdByKey = await seedModules();
 
   const printedCreds: string[] = [];
@@ -418,11 +620,9 @@ async function main() {
   console.log("\n============================================================");
   console.log("Seed complete.");
   console.log(`Companies: ${COMPANY_PLANS.map((c) => c.companyName).join(", ")}`);
-  if (printedCreds.length > 0) {
-    console.log("\nNewly created login credentials (dev/demo only — not persisted anywhere):");
-    for (const line of printedCreds) console.log(`  ${line}`);
-  } else {
-    console.log("\nNo new users were created this run (all seed users already existed).");
+  console.log("\nLogin Credentials (format: ${role}@123):");
+  for (const line of printedCreds) {
+    console.log(`  ${line}`);
   }
   console.log("============================================================\n");
 }

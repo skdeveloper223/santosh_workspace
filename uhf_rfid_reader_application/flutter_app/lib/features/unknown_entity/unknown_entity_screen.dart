@@ -21,7 +21,14 @@ class _UnknownEntityScreenState extends State<UnknownEntityScreen> {
 
   void _reload() {
     final gateId = context.read<AppState>().selectedGate?.id;
-    setState(() => _future = context.read<AppState>().api.getUnknownEntities(gateId: gateId));
+    final future = context.read<AppState>().api.getUnknownEntities(gateId: gateId);
+    // Block body, not `=>` — an arrow's body is the assignment expression
+    // itself, so `() => _future = future` evaluates to the assigned Future
+    // and setState() rejects a callback that returns one (crashed live on
+    // a real device before this fix).
+    setState(() {
+      _future = future;
+    });
   }
 
   @override
