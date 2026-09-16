@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import type { ReaderItem, AttachmentOption } from "@/server/services/readers/listReaders";
 import { IconWifi, IconMapPin, IconClock, IconNetwork, IconTrash, IconPlus, IconSettings } from "@/components/icons";
+import { useToast } from "@/components/ui/Toast";
 
 function formatLastSeen(value: string | null): string {
   if (!value) return "Never";
@@ -18,20 +19,33 @@ export function ReadersGrid({
   attachmentOptions: AttachmentOption[];
 }) {
   const router = useRouter();
+  const toast = useToast();
   const [readers, setReaders] = useState(initialReaders);
   const [modalOpen, setModalOpen] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
 
   const onlineCount = readers.filter((r) => r.isActive).length;
 
-  async function handleDelete(id: string) {
-    if (!confirm("Remove this reader? This can't be undone.")) return;
+  async function handleDelete(id: string, name: string) {
+    if (!confirm(`Remove reader "${name}"? This action cannot be undone.`)) return;
     setDeletingId(id);
     const prev = readers;
     setReaders((rs) => rs.filter((r) => r.id !== id));
-    const res = await fetch(`/api/readers/${id}`, { method: "DELETE" });
-    setDeletingId(null);
-    if (!res.ok) setReaders(prev);
+    
+    try {
+      const res = await fetch(`/api/readers/${id}`, { method: "DELETE" });
+      setDeletingId(null);
+      if (!res.ok) {
+        setReaders(prev);
+        toast.error("Delete Failed", `Could not remove reader "${name}".`);
+      } else {
+        toast.success("Reader Removed", `Reader "${name}" was successfully deleted.`);
+      }
+    } catch {
+      setDeletingId(null);
+      setReaders(prev);
+      toast.error("Network Error", "Failed to connect to server.");
+    }
   }
 
   return (
@@ -40,7 +54,10 @@ export function ReadersGrid({
         <span style={{ fontWeight: 700, fontSize: 13, color: "var(--color-text-muted)", marginRight: "auto" }}>
           {onlineCount}/{readers.length} Online
         </span>
-        <button className="btn btn-ghost btn-sm" onClick={() => router.refresh()}>
+        <button className="btn btn-ghost btn-sm" onClick={() => {
+          router.refresh();
+          toast.info("Refreshed", "Reader status refreshed from server.");
+        }}>
           Refresh
         </button>
         <button className="btn btn-primary btn-sm" onClick={() => setModalOpen(true)}>
@@ -88,7 +105,7 @@ export function ReadersGrid({
                 <button className="btn btn-ghost btn-sm" style={{ flex: 1 }} disabled title="Full edit form is a follow-up module">
                   <IconSettings /> Configure
                 </button>
-                <button className="btn btn-danger-ghost btn-sm" onClick={() => handleDelete(r.id)} disabled={deletingId === r.id}>
+                <button className="btn btn-danger-ghost btn-sm" onClick={() => handleDelete(r.id, r.name)} disabled={deletingId === r.id}>
                   <IconTrash />
                 </button>
               </div>
@@ -104,6 +121,7 @@ export function ReadersGrid({
           onCreated={(reader) => {
             setReaders((rs) => [...rs, reader].sort((a, b) => a.name.localeCompare(b.name)));
             setModalOpen(false);
+            toast.success("Reader Added", `Successfully registered ${reader.name}.`);
           }}
         />
       )}
@@ -120,6 +138,7 @@ function AddReaderModal({
   onClose: () => void;
   onCreated: (reader: ReaderItem) => void;
 }) {
+  const toast = useToast();
   const [name, setName] = useState("");
   const [ipAddress, setIpAddress] = useState("192.168.1.100");
   const [port, setPort] = useState("9000");
@@ -136,29 +155,40 @@ function AddReaderModal({
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!attachValue) {
-      setError("This company has no gates or checkpoints yet — create one under Organization first.");
+      const errMsg = "This company has no gates or checkpoints yet — create one under Organization first.";
+      setError(errMsg);
+      toast.warning("Attachment Required", errMsg);
       return;
     }
     setSubmitting(true);
     setError(null);
     const [kind, id] = attachValue.split(":") as ["gate" | "checkpoint", string];
 
-    const res = await fetch("/api/readers", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name, ipAddress, port: Number(port), locationType, attachTo: { kind, id } }),
-    });
-    setSubmitting(false);
+    try {
+      const res = await fetch("/api/readers", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name, ipAddress, port: Number(port), locationType, attachTo: { kind, id } }),
+      });
+      setSubmitting(false);
 
-    if (!res.ok) {
-      const body = await res.json().catch(() => null);
-      setError(body?.error?.message ?? "Couldn't add reader — please check the details and try again.");
-      return;
+      if (!res.ok) {
+        const body = await res.json().catch(() => null);
+        const errMsg = body?.error?.message ?? "Couldn't add reader — please check the details and try again.";
+        setError(errMsg);
+        toast.error("Failed to Add Reader", errMsg);
+        return;
+      }
+      const { data } = await res.json();
+      const locationName =
+        attachmentOptions.flatMap((s) => [...s.gates, ...s.checkpoints]).find((g) => g.id === id)?.name ?? "—";
+      onCreated({ id: data.id, name, ipAddress, port: Number(port), locationType, locationName, isActive: false, lastSeenAt: null });
+    } catch {
+      setSubmitting(false);
+      const errMsg = "Network request failed. Please check connection.";
+      setError(errMsg);
+      toast.error("Network Error", errMsg);
     }
-    const { data } = await res.json();
-    const locationName =
-      attachmentOptions.flatMap((s) => [...s.gates, ...s.checkpoints]).find((g) => g.id === id)?.name ?? "—";
-    onCreated({ id: data.id, name, ipAddress, port: Number(port), locationType, locationName, isActive: false, lastSeenAt: null });
   }
 
   return (

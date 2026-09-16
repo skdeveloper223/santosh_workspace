@@ -10,9 +10,14 @@ export const SECURITY_HEADERS: Record<string, string> = {
   "X-Frame-Options": "DENY",
   "Referrer-Policy": "strict-origin-when-cross-origin",
   "Permissions-Policy": "camera=(), microphone=(), geolocation=()",
-  // Starts restrictive per §8.8 — widen with a documented reason per directive
-  // once camera HLS embeds etc. are known (Phase 6).
-  "Content-Security-Policy": "default-src 'self'",
+  // Properly configured CSP directives allowing inline styles, Next.js hydration scripts, Google Fonts, images, and Supabase connections.
+  "Content-Security-Policy":
+    "default-src 'self'; " +
+    "script-src 'self' 'unsafe-inline' 'unsafe-eval'; " +
+    "style-src 'self' 'unsafe-inline'; " +
+    "img-src 'self' data: blob: https:; " +
+    "font-src 'self' data: https://fonts.gstatic.com; " +
+    "connect-src 'self' https: wss: ws: http:;",
 };
 
 export function applySecurityHeaders(res: Response): Response {

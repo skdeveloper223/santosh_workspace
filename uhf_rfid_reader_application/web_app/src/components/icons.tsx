@@ -130,3 +130,29 @@ export const IconNetwork = (p: SVGProps<SVGSVGElement>) => (
     <path d="M7.7 7.3L10.5 16M16.3 7.3L13.5 16" />
   </svg>
 );
+
+export const IconLogOut = (p: SVGProps<SVGSVGElement>) => (
+  <svg {...base} {...p}>
+    <path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4M16 17l5-5-5-5M21 12H9" />
+  </svg>
+);
+
+export const IconX = (p: SVGProps<SVGSVGElement>) => (
+  <svg {...base} {...p}>
+    <path d="M18 6L6 18M6 6l12 12" />
+  </svg>
+);
+
+export const IconCheck = (p: SVGProps<SVGSVGElement>) => (
+  <svg {...base} {...p}>
+    <path d="M20 6L9 17l-5-5" />
+  </svg>
+);
+
+export const IconInfo = (p: SVGProps<SVGSVGElement>) => (
+  <svg {...base} {...p}>
+    <circle cx="12" cy="12" r="9" />
+    <path d="M12 8h.01M12 12v4" />
+  </svg>
+);
+

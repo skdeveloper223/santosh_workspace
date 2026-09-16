@@ -2,17 +2,18 @@
 
 import { useState } from "react";
 import type { VehicleDetail } from "@/server/services/vehicles/getVehicleDetail";
+import { useToast } from "@/components/ui/Toast";
 
 export function VehicleAuthEditor({ vehicleId, initial }: { vehicleId: string; initial: VehicleDetail }) {
   const [sites, setSites] = useState(initial.sites);
   const [error, setError] = useState<string | null>(null);
   const [pendingKey, setPendingKey] = useState<string | null>(null);
+  const toast = useToast();
 
-  async function toggleSite(siteId: string, authorized: boolean) {
+  async function toggleSite(siteId: string, siteName: string, authorized: boolean) {
     setError(null);
     setPendingKey(`site:${siteId}`);
     const prev = sites;
-    // Revoking a site also drops every gate under it — mirror that locally so the UI never shows a stale "authorized" gate.
     setSites((s) =>
       s.map((site) =>
         site.siteId === siteId
@@ -21,19 +22,34 @@ export function VehicleAuthEditor({ vehicleId, initial }: { vehicleId: string; i
       ),
     );
 
-    const res = await fetch(`/api/vehicles/${vehicleId}/site-authorizations`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ siteId, authorized }),
-    });
-    setPendingKey(null);
-    if (!res.ok) {
+    try {
+      const res = await fetch(`/api/vehicles/${vehicleId}/site-authorizations`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ siteId, authorized }),
+      });
+      setPendingKey(null);
+      if (!res.ok) {
+        setSites(prev);
+        const errMsg = "Couldn't update site authorization — please try again.";
+        setError(errMsg);
+        toast.error("Site Access Error", errMsg);
+      } else {
+        toast.success(
+          authorized ? "Site Access Granted" : "Site Access Revoked",
+          `Updated authorization for site "${siteName}".`,
+        );
+      }
+    } catch {
+      setPendingKey(null);
       setSites(prev);
-      setError("Couldn't update site authorization — please try again.");
+      const errMsg = "Network error. Failed to reach authorization endpoint.";
+      setError(errMsg);
+      toast.error("Network Error", errMsg);
     }
   }
 
-  async function toggleGate(siteId: string, gateId: string, authorized: boolean) {
+  async function toggleGate(siteId: string, gateId: string, gateName: string, authorized: boolean) {
     setError(null);
     setPendingKey(`gate:${gateId}`);
     const prev = sites;
@@ -45,16 +61,31 @@ export function VehicleAuthEditor({ vehicleId, initial }: { vehicleId: string; i
       ),
     );
 
-    const res = await fetch(`/api/vehicles/${vehicleId}/gate-authorizations`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ gateId, authorized }),
-    });
-    setPendingKey(null);
-    if (!res.ok) {
+    try {
+      const res = await fetch(`/api/vehicles/${vehicleId}/gate-authorizations`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ gateId, authorized }),
+      });
+      setPendingKey(null);
+      if (!res.ok) {
+        setSites(prev);
+        const body = await res.json().catch(() => null);
+        const errMsg = body?.error?.message ?? "Couldn't update gate authorization — please try again.";
+        setError(errMsg);
+        toast.error("Gate Access Error", errMsg);
+      } else {
+        toast.success(
+          authorized ? "Gate Access Granted" : "Gate Access Revoked",
+          `Updated gate access for "${gateName}".`,
+        );
+      }
+    } catch {
+      setPendingKey(null);
       setSites(prev);
-      const body = await res.json().catch(() => null);
-      setError(body?.error?.message ?? "Couldn't update gate authorization — please try again.");
+      const errMsg = "Network error. Failed to reach gate authorization endpoint.";
+      setError(errMsg);
+      toast.error("Network Error", errMsg);
     }
   }
 
@@ -71,42 +102,32 @@ export function VehicleAuthEditor({ vehicleId, initial }: { vehicleId: string; i
                 type="checkbox"
                 checked={site.authorized}
                 disabled={pendingKey === `site:${site.siteId}`}
-                onChange={(e) => toggleSite(site.siteId, e.target.checked)}
+                onChange={(e) => toggleSite(site.siteId, site.name, e.target.checked)}
               />
-              {site.name}
+              <span>{site.name}</span>
+              {pendingKey === `site:${site.siteId}` && <span style={{ fontSize: 11, color: "var(--color-text-muted)" }}>Updating…</span>}
             </label>
-            {site.gates.map((gate) => (
-              <div
-                key={gate.gateId}
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "space-between",
-                  padding: "7px 4px 7px 26px",
-                  fontSize: 12.5,
-                  color: site.authorized ? "var(--color-text-muted)" : "var(--color-text-faint)",
-                }}
-              >
-                <span>{gate.name}</span>
-                <label className="switch">
+
+            <div style={{ paddingLeft: 24, marginTop: 8, display: "flex", flexDirection: "column", gap: 6 }}>
+              {site.gates.map((gate) => (
+                <label key={gate.gateId} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5, color: "var(--color-text-muted)", cursor: "pointer" }}>
                   <input
                     type="checkbox"
                     checked={gate.authorized}
                     disabled={!site.authorized || pendingKey === `gate:${gate.gateId}`}
-                    onChange={(e) => toggleGate(site.siteId, gate.gateId, e.target.checked)}
+                    onChange={(e) => toggleGate(site.siteId, gate.gateId, gate.name, e.target.checked)}
                   />
-                  <span className="slider" />
+                  <span>{gate.name}</span>
+                  {pendingKey === `gate:${gate.gateId}` && <span style={{ fontSize: 11, color: "var(--color-text-muted)" }}>Updating…</span>}
                 </label>
-              </div>
-            ))}
+              ))}
+            </div>
           </div>
         ))}
       </div>
-      <p className="hint" style={{ marginTop: 10 }}>
-        Gate toggles unlock only once their site is authorized — owning a vehicle never implies access.
-      </p>
+
       {error && (
-        <p style={{ color: "var(--color-danger)", fontSize: 12.5, marginTop: 6 }} role="alert">
+        <p style={{ color: "var(--color-danger)", fontSize: 12.5, marginTop: 10 }} role="alert">
           {error}
         </p>
       )}

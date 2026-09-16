@@ -1,6 +1,7 @@
 "use client";
 
 import { PALETTES, useTheme, type Mode } from "./ThemeProvider";
+import { useToast } from "@/components/ui/Toast";
 
 const MODES: { key: Mode; label: string }[] = [
   { key: "light", label: "Light" },
@@ -10,6 +11,17 @@ const MODES: { key: Mode; label: string }[] = [
 
 export function ThemeSwitcher() {
   const { palette, mode, setPalette, setMode } = useTheme();
+  const toast = useToast();
+
+  function handlePaletteChange(key: (typeof PALETTES)[number]["key"], label: string) {
+    setPalette(key);
+    toast.info("Theme Updated", `Switched to ${label} palette.`);
+  }
+
+  function handleModeChange(key: Mode, label: string) {
+    setMode(key);
+    toast.info("Display Mode", `Switched to ${label} mode.`);
+  }
 
   return (
     <div className="card card-pad">
@@ -22,7 +34,7 @@ export function ThemeSwitcher() {
             key={p.key}
             type="button"
             className={`palette-card${palette === p.key ? " active" : ""}`}
-            onClick={() => setPalette(p.key)}
+            onClick={() => handlePaletteChange(p.key, p.label)}
           >
             <span className="pc-dot" style={{ background: p.hex }} />
             <span>
@@ -40,7 +52,7 @@ export function ThemeSwitcher() {
       </div>
       <div className="seg" style={{ marginTop: 6 }}>
         {MODES.map((m) => (
-          <button key={m.key} type="button" className={mode === m.key ? "active" : ""} onClick={() => setMode(m.key)}>
+          <button key={m.key} type="button" className={mode === m.key ? "active" : ""} onClick={() => handleModeChange(m.key, m.label)}>
             {m.label}
           </button>
         ))}

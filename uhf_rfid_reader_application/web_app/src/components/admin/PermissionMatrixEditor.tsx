@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import type { RoleMatrix } from "@/server/services/permissions/getRoleMatrix";
+import { useToast } from "@/components/ui/Toast";
 
 const ACTIONS = ["create", "read", "update", "delete"] as const;
 const VEHICLE_ACTIONS = ["manageSiteAuth", "manageGateAuth"] as const;
@@ -15,6 +16,7 @@ const ACTION_LABEL: Record<string, string> = {
 };
 
 export function PermissionMatrixEditor({ matrix }: { matrix: RoleMatrix }) {
+  const toast = useToast();
   const [selectedRoleId, setSelectedRoleId] = useState(matrix.roles[0]?.id ?? "");
   const [cellsByRoleId, setCellsByRoleId] = useState(matrix.cellsByRoleId);
   const [savingKey, setSavingKey] = useState<string | null>(null);
@@ -22,7 +24,7 @@ export function PermissionMatrixEditor({ matrix }: { matrix: RoleMatrix }) {
   const selectedRole = matrix.roles.find((r) => r.id === selectedRoleId);
   const isMasterAdmin = selectedRole?.name === "master_admin";
 
-  async function toggle(moduleKey: string, action: string, nextChecked: boolean) {
+  async function toggle(moduleKey: string, moduleLabel: string, action: string, nextChecked: boolean) {
     const current = cellsByRoleId[selectedRoleId]?.[moduleKey] ?? [];
     const nextActions = nextChecked ? [...new Set([...current, action])] : current.filter((a) => a !== action);
 
@@ -30,15 +32,27 @@ export function PermissionMatrixEditor({ matrix }: { matrix: RoleMatrix }) {
     setCellsByRoleId((prev) => ({ ...prev, [selectedRoleId]: { ...prev[selectedRoleId], [moduleKey]: nextActions } }));
     setSavingKey(`${moduleKey}:${action}`);
 
-    const res = await fetch(`/api/roles/${selectedRoleId}/permissions`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ moduleKey, actions: nextActions }),
-    });
-    setSavingKey(null);
+    try {
+      const res = await fetch(`/api/roles/${selectedRoleId}/permissions`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ moduleKey, actions: nextActions }),
+      });
+      setSavingKey(null);
 
-    if (!res.ok) {
+      if (!res.ok) {
+        setCellsByRoleId((prev) => ({ ...prev, [selectedRoleId]: { ...prev[selectedRoleId], [moduleKey]: current } }));
+        toast.error("Permission Update Failed", `Could not update ${ACTION_LABEL[action]} on ${moduleLabel}.`);
+      } else {
+        toast.success(
+          "Permissions Updated",
+          `${selectedRole?.name ?? "Role"} ${nextChecked ? "granted" : "revoked"} ${ACTION_LABEL[action]} on ${moduleLabel}.`,
+        );
+      }
+    } catch {
+      setSavingKey(null);
       setCellsByRoleId((prev) => ({ ...prev, [selectedRoleId]: { ...prev[selectedRoleId], [moduleKey]: current } }));
+      toast.error("Network Error", "Failed to connect to permission server.");
     }
   }
 
@@ -90,7 +104,7 @@ export function PermissionMatrixEditor({ matrix }: { matrix: RoleMatrix }) {
                           type="checkbox"
                           checked={isMasterAdmin || grantedActions.includes(action)}
                           disabled={isMasterAdmin || savingKey === `${mod.key}:${action}`}
-                          onChange={(e) => toggle(mod.key, action, e.target.checked)}
+                          onChange={(e) => toggle(mod.key, mod.label, action, e.target.checked)}
                         />
                         <span className="slider" />
                       </label>
@@ -104,7 +118,7 @@ export function PermissionMatrixEditor({ matrix }: { matrix: RoleMatrix }) {
                             type="checkbox"
                             checked={isMasterAdmin || grantedActions.includes(action)}
                             disabled={isMasterAdmin || savingKey === `${mod.key}:${action}`}
-                            onChange={(e) => toggle(mod.key, action, e.target.checked)}
+                            onChange={(e) => toggle(mod.key, mod.label, action, e.target.checked)}
                           />
                           <span className="slider" />
                         </label>

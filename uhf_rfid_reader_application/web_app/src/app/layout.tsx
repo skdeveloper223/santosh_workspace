@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Inter, Manrope, JetBrains_Mono } from "next/font/google";
 import { ThemeScript } from "@/components/ThemeScript";
 import { ThemeProvider } from "@/components/ThemeProvider";
+import { ToastProvider } from "@/components/ui/Toast";
 import "./globals.css";
 
 const inter = Inter({ variable: "--font-inter", subsets: ["latin"] });
@@ -13,12 +14,14 @@ export const metadata: Metadata = {
   description: "Enterprise UHF RFID access-control and asset/vehicle-tracking console.",
 };
 
-export default function RootLayout({ children }: LayoutProps<"/">) {
+export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en" className={`${inter.variable} ${manrope.variable} ${jetbrainsMono.variable}`} suppressHydrationWarning>
       <body suppressHydrationWarning>
         <ThemeScript />
-        <ThemeProvider>{children}</ThemeProvider>
+        <ThemeProvider>
+          <ToastProvider>{children}</ToastProvider>
+        </ThemeProvider>
       </body>
     </html>
   );
