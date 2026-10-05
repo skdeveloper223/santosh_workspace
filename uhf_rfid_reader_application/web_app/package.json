@@ -3,14 +3,16 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev",
+    "dev": "next dev --port 4000",
     "build": "next build",
-    "start": "next start",
+    "start": "next start --port 4000",
     "lint": "eslint",
     "seed": "tsx scripts/seed.ts",
     "db:clean": "tsx scripts/clean-db.ts",
     "seed:clean": "tsx scripts/clean-db.ts && tsx scripts/seed.ts",
-    "dev:realtime": "tsx watch realtime-gateway/index.ts"
+    "dev:realtime": "tsx watch realtime-gateway/index.ts",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "dependencies": {
     "@supabase/ssr": "^0.12.6",
@@ -29,14 +31,20 @@
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
+    "@testing-library/dom": "^10.4.2",
+    "@testing-library/jest-dom": "^7.0.1",
+    "@testing-library/react": "^16.3.3",
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "dotenv": "^17.4.2",
     "eslint": "^9",
     "eslint-config-next": "16.3.4",
+    "happy-dom": "^20.14.5",
     "tailwindcss": "^4",
     "tsx": "^4.23.13",
-    "typescript": "^5"
+    "typescript": "^5",
+    "vite": "^8.3.0",
+    "vitest": "^5.0.1"
   }
 }

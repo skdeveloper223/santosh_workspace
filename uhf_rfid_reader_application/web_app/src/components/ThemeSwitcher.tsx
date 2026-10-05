@@ -1,7 +1,14 @@
 "use client";
 
+import { useSyncExternalStore } from "react";
 import { PALETTES, useTheme, type Mode } from "./ThemeProvider";
 import { useToast } from "@/components/ui/Toast";
+
+const emptySubscribe = () => () => {};
+
+function useIsMounted() {
+  return useSyncExternalStore(emptySubscribe, () => true, () => false);
+}
 
 const MODES: { key: Mode; label: string }[] = [
   { key: "light", label: "Light" },
@@ -12,6 +19,7 @@ const MODES: { key: Mode; label: string }[] = [
 export function ThemeSwitcher() {
   const { palette, mode, setPalette, setMode } = useTheme();
   const toast = useToast();
+  const mounted = useIsMounted();
 
   function handlePaletteChange(key: (typeof PALETTES)[number]["key"], label: string) {
     setPalette(key);
@@ -23,6 +31,10 @@ export function ThemeSwitcher() {
     toast.info("Display Mode", `Switched to ${label} mode.`);
   }
 
+  // Prevent SSR/client hydration mismatch for localStorage-driven theme state
+  const activePalette = mounted ? palette : "ocean";
+  const activeMode = mounted ? mode : "system";
+
   return (
     <div className="card card-pad">
       <div className="side-label" style={{ paddingLeft: 0 }}>
@@ -33,8 +45,9 @@ export function ThemeSwitcher() {
           <button
             key={p.key}
             type="button"
-            className={`palette-card${palette === p.key ? " active" : ""}`}
+            className={`palette-card${activePalette === p.key ? " active" : ""}`}
             onClick={() => handlePaletteChange(p.key, p.label)}
+            suppressHydrationWarning
           >
             <span className="pc-dot" style={{ background: p.hex }} />
             <span>
@@ -52,7 +65,13 @@ export function ThemeSwitcher() {
       </div>
       <div className="seg" style={{ marginTop: 6 }}>
         {MODES.map((m) => (
-          <button key={m.key} type="button" className={mode === m.key ? "active" : ""} onClick={() => handleModeChange(m.key, m.label)}>
+          <button
+            key={m.key}
+            type="button"
+            className={activeMode === m.key ? "active" : ""}
+            onClick={() => handleModeChange(m.key, m.label)}
+            suppressHydrationWarning
+          >
             {m.label}
           </button>
         ))}

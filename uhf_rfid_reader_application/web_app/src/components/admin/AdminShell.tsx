@@ -4,7 +4,7 @@ import { useState, useRef, useEffect } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { Sidebar } from "./Sidebar";
 import { IconMenu, IconLogOut, IconSettings, IconShield } from "@/components/icons";
-import { ThemeSwitcher } from "@/components/ThemeSwitcher";
+import { HeaderThemeModal } from "@/components/HeaderThemeModal";
 import { createSupabaseBrowserClient } from "@/server/db/supabaseBrowser";
 import { useToast } from "@/components/ui/Toast";
 
@@ -94,10 +94,8 @@ export function AdminShell({
 
           {/* Topbar Actions & Profile Menu */}
           <div className="topbar-actions">
-            {/* Quick Theme Switcher */}
-            <div style={{ display: "flex", alignItems: "center" }}>
-              <ThemeSwitcher />
-            </div>
+            {/* Header Theme & Palette Modal Trigger */}
+            <HeaderThemeModal />
 
             {/* Profile Menu Dropdown */}
             <div className="profile-menu-container" ref={menuRef}>

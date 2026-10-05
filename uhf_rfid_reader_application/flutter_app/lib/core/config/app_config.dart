@@ -20,12 +20,12 @@ class AppConfig {
   /// Supabase Auth itself (plans/my_hole_project_plan.md §7.7 point 1).
   static const apiBaseUrl = String.fromEnvironment(
     'API_BASE_URL',
-    defaultValue: 'http://localhost:3000',
+    defaultValue: 'http://172.25.3.117:3000',
   );
 
   /// Standalone Realtime Gateway process (§7.9, §8.1) — run via `npm run dev:realtime`.
   static const realtimeUrl = String.fromEnvironment(
     'REALTIME_URL',
-    defaultValue: 'http://localhost:9010',
+    defaultValue: 'http://172.25.3.117:9010', //9010
   );
 }
